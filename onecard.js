@@ -22,7 +22,6 @@ const gameLobby = document.getElementById('game-lobby');
 const roomList = document.getElementById('room-list');
 const createRoomBtn = document.getElementById('create-room-btn');
 const roomNameInput = document.getElementById('room-name-input');
-// ⛔️ [AI] AI 관련 DOM 요소
 const aiCheckbox = document.getElementById('ai-checkbox');
 const geminiApiKeyInput = document.getElementById('gemini-api-key-input');
 const geminiModelSelect = document.getElementById('gemini-model-select');
@@ -34,12 +33,11 @@ const leaveRoomBtn = document.getElementById('leave-room-btn');
 const opponentHand = document.getElementById('opponent-hand');
 const myHand = document.getElementById('my-hand');
 const discardPile = document.getElementById('discard-pile');
-const deckPile = document.getElementById('deck'); // ⛔️ [버그 수정] deckPile 정의
-
+const deckPile = document.getElementById('deck');
+const aiDebugLog = document.getElementById('ai-debug-log'); // ⛔️ [AI 디버그] 로그 DOM
 
 // Firebase 참조
 const roomsRef = ref(database, 'onecard_rooms');
-// ⛔️ [버그 수정] 'currentPlayer'는 이 브라우저의 유저 정보를 담는 *전역* 객체
 let currentPlayer = {
     id: `player_${Date.now()}`, 
     name: null,
@@ -48,13 +46,13 @@ let currentPlayer = {
 };
 let currentRoomRef = null;
 
-// ⛔️ [AI] AI 관련 전역 변수
+// AI 관련 전역 변수
 let localGeminiKey = null; 
 let localGeminiModel = null; 
 let isAiThinking = false;  
 const AI_PLAYER_ID = "player_AI_Gemini";
 
-// ⛔️ [AI] AI 옵션 UI 토글
+// AI 옵션 UI 토글
 aiCheckbox.addEventListener('change', () => {
     const isChecked = aiCheckbox.checked;
     geminiApiKeyInput.style.display = isChecked ? 'block' : 'none';
@@ -64,7 +62,6 @@ aiCheckbox.addEventListener('change', () => {
 
 // --- 로비 로직 ---
 
-// 방 만들기
 createRoomBtn.addEventListener('click', () => {
     const roomName = roomNameInput.value.trim();
     if (!roomName) {
@@ -72,7 +69,6 @@ createRoomBtn.addEventListener('click', () => {
         return;
     }
     
-    // ⛔️ [AI] AI 옵션 확인
     const isWithAI = aiCheckbox.checked;
     if (isWithAI) {
         localGeminiKey = geminiApiKeyInput.value.trim();
@@ -93,14 +89,12 @@ createRoomBtn.addEventListener('click', () => {
     const newRoomRef = push(roomsRef);
     const roomId = newRoomRef.key;
 
-    // 1. 방 기본 정보 설정
     set(newRoomRef, {
         name: roomName,
         players: {}, 
         state: 'waiting',
-        host: currentPlayer.id // 방장 ID 저장
+        host: currentPlayer.id 
     }).then(() => {
-        // 2. [AI] 방장이 AI 플레이어를 DB에 추가
         if (isWithAI) {
             const aiPlayerRef = ref(database, `onecard_rooms/${roomId}/players/${AI_PLAYER_ID}`);
             set(aiPlayerRef, { 
@@ -109,8 +103,6 @@ createRoomBtn.addEventListener('click', () => {
                 hand: {} 
             });
         }
-        
-        // 3. 방장 입장
         enterRoom(roomId, roomName);
     });
     
@@ -121,8 +113,6 @@ createRoomBtn.addEventListener('click', () => {
     geminiApiKeyInput.value = '';
 });
 
-
-// 방 목록 실시간 업데이트
 onValue(roomsRef, (snapshot) => {
     roomList.innerHTML = '';
     if (snapshot.exists()) {
@@ -166,11 +156,9 @@ function enterRoom(roomId, name) {
     onDisconnect(currentPlayer.playerRef).remove();
 
     roomTitle.textContent = name;
-    
     gameLobby.style.display = 'none';
     gameRoom.style.display = 'flex';
 
-    // 방 정보 감시 (핵심 리스너)
     onValue(currentRoomRef, (snapshot) => {
         const roomData = snapshot.val();
         if (!roomData) { 
@@ -178,25 +166,20 @@ function enterRoom(roomId, name) {
             return;
         }
         
-        // UI 업데이트
         if (roomData.players && roomData.players[currentPlayer.id]) {
             updatePlayerHands(roomData.players, roomData);
         } else if (!roomData.players[currentPlayer.id] && roomData.state === 'playing') {
-            // 게임 도중 나갔거나 킥당한 경우
             leaveRoom();
         }
         
         updateGameBoard(roomData);
 
-        // 방장인 경우에만 게임 시작 버튼 표시
-        // ⛔️ [버그 수정] 이 검사는 전역 currentPlayer.id와 DB의 roomData.host를 비교 (정상)
         if (roomData.host === currentPlayer.id && roomData.state === 'waiting') {
             startGameBtn.style.display = 'block';
         } else {
             startGameBtn.style.display = 'none';
         }
 
-        // ⛔️ [AI] AI 턴 처리 로직 (방장만 실행)
         handleAITurn(roomData);
     });
 }
@@ -214,10 +197,9 @@ function leaveRoom() {
 
     currentPlayer.roomId = null;
     currentPlayer.playerRef = null;
-    
-    // ⛔️ [AI] 로컬 API 키 및 모델 초기화
     localGeminiKey = null;
     localGeminiModel = null; 
+    aiDebugLog.textContent = ''; // ⛔️ [AI 디버그] 로그 창 비우기
 
     gameLobby.style.display = 'block';
     gameRoom.style.display = 'none';
@@ -225,7 +207,6 @@ function leaveRoom() {
 
 leaveRoomBtn.addEventListener('click', leaveRoom);
 
-// (updatePlayerHands, updateGameBoard, createCardDiv... UI 로직은 문제 없음)
 function updatePlayerHands(players, roomData) {
     if (!players || !roomData) return;
 
@@ -234,7 +215,6 @@ function updatePlayerHands(players, roomData) {
 
     const playerIds = Object.keys(players).filter(id => !players[id].isAI);
     const myPlayerIndex = playerIds.indexOf(currentPlayer.id);
-
     const aiPlayerIds = Object.keys(players).filter(id => players[id].isAI);
 
     const opponentPlayerIds = [
@@ -324,11 +304,11 @@ function updateGameBoard(roomData) {
             discardPile.appendChild(createCardDiv(topCard));
         }
         const deckCount = roomData.deck ? roomData.deck.length : 0;
-        deckPile.textContent = `덱 (${deckCount})`; // ⛔️ [버그 수정] deckElement -> deckPile
+        deckPile.textContent = `덱 (${deckCount})`;
 
     } else {
         discardPile.innerHTML = '';
-        deckPile.textContent = '덱'; // ⛔️ [버그 수정] deckElement -> deckPile
+        deckPile.textContent = '덱';
     }
     
     if (roomData.state === 'finished') {
@@ -364,7 +344,6 @@ function createCardDiv(card) {
         suitSymbol = { heart: '♥', diamond: '♦', club: '♣', spade: '♠' }[card.suit];
         cardDiv.classList.add(card.suit);
     }
-
 
     cardDiv.innerHTML = `
         <span class="rank top">${rank}</span>
@@ -408,24 +387,18 @@ function canPlayCard(cardToPlay, topCard, currentAttack) {
 }
 
 
-// 내 손의 카드 클릭
 myHand.addEventListener('click', (e) => {
     const cardDiv = e.target.closest('.card');
     if (!cardDiv || !cardDiv.dataset.cardId) return;
-
     const cardId = cardDiv.dataset.cardId;
     handlePlayCard(currentPlayer.id, cardId);
 });
 
-// 덱 클릭
 deckPile.addEventListener('click', () => {
     handleDrawCard(currentPlayer.id);
 });
 
 
-// ⛔️ [버그 수정] handlePlayCard, handleDrawCard 내부의
-//  alerts/prompts가 playerID === currentPlayer.id (즉, '나')일 때만
-// 표시되도록 수정
 function handlePlayCard(playerId, cardId, chosenSuit = null) {
     runTransaction(currentRoomRef, (room) => {
         if (!room || room.state !== 'playing') return;
@@ -490,7 +463,7 @@ function handlePlayCard(playerId, cardId, chosenSuit = null) {
                     break; 
                 case '7': 
                     let newSuit = null;
-                    if (playerId === currentPlayer.id) { // ⛔️ '나'일 때만 프롬프트
+                    if (playerId === currentPlayer.id) {
                         newSuit = prompt('변경할 무늬를 입력하세요 (heart, diamond, club, spade)');
                     } else {
                         newSuit = chosenSuit; 
@@ -545,7 +518,6 @@ function handleDrawCard(playerId) {
                 if (!room.players[playerId].hand) room.players[playerId].hand = {};
                 room.players[playerId].hand[drawnCard.id] = drawnCard;
             } else {
-                 // ⛔️ '나'일 때만 알림
                 if (playerId === currentPlayer.id) alert('덱에 카드가 없습니다!');
             }
         }
@@ -586,12 +558,11 @@ function refillDeck(room) {
 // --- 게임 시작 로직 ---
 startGameBtn.addEventListener('click', () => {
     runTransaction(currentRoomRef, (room) => {
-        // ⛔️ [버그 수정] 이 검사는 전역 currentPlayer.id와 DB의 room.host를 비교 (정상)
         if (room && room.state === 'waiting' && room.host === currentPlayer.id) {
             const playerIds = Object.keys(room.players);
             if (playerIds.length < 2) {
                 alert('플레이어가 2명 이상이어야 게임을 시작할 수 있습니다.');
-                return; // 트랜잭션 중단
+                return;
             }
 
             const deck = createDeck();
@@ -599,7 +570,6 @@ startGameBtn.addEventListener('click', () => {
 
             const cardsToDeal = playerIds.length <= 4 ? 7 : 5;
             playerIds.forEach(playerId => {
-                // ⛔️ [버그 수정] room.players[playerId]가 null이 아닌지 확인
                 if (room.players[playerId]) { 
                     room.players[playerId].hand = {};
                     for (let i = 0; i < cardsToDeal; i++) {
@@ -622,7 +592,7 @@ startGameBtn.addEventListener('click', () => {
             room.attackStack = 0; 
             room.turnDirection = 1;
         }
-        return room; // 수정한 room 객체 반환
+        return room;
     });
 });
 
@@ -650,60 +620,63 @@ function shuffleDeck(deck) {
 
 
 // ===========================================
-// ⛔️ [AI] Gemini AI 로직 섹션 (치명적 버그 수정)
+// ⛔️ [AI 디버그] Gemini AI 로직 수정 (버그 픽스)
 // ===========================================
 
 /**
  * AI 턴인지 감지하고, 방장인 경우 AI 로직을 실행하는 메인 핸들러
  */
 function handleAITurn(room) {
-    // 1. 게임 중이 아니거나, room 데이터가 없으면 즉시 중단
     if (!room || room.state !== 'playing' || !room.players) return;
 
-    // 2. 현재 턴인 플레이어의 ID와 객체 가져오기
     const aiPlayerId = room.currentPlayerTurn;
     const playerWhoseTurnItIs = room.players[aiPlayerId];
-
-    // 3. 이 브라우저의 주인이 방장(Host)인지 확인
-    // ⛔️ [버그 수정] 전역 currentPlayer.id (방장 ID)와 room.host를 비교
     const amITheHost = (room.host === currentPlayer.id);
 
-    // 4. AI 턴 조건을 모두 만족하는지 확인
     if (
-        playerWhoseTurnItIs &&      // 현재 턴 플레이어가 존재하고
-        playerWhoseTurnItIs.isAI && // 그 플레이어가 AI이며
-        amITheHost &&               // 내가 방장이고
-        localGeminiKey &&           // API 키가 로드되어 있으며
-        localGeminiModel &&         // 모델이 선택되었고
-        !isAiThinking               // 현재 AI가 생각 중이 아니면
+        playerWhoseTurnItIs &&      
+        playerWhoseTurnItIs.isAI && 
+        amITheHost &&               
+        localGeminiKey &&           
+        localGeminiModel &&         
+        !isAiThinking               
     ) 
     {
         isAiThinking = true; 
-        console.log(`Gemini AI (${localGeminiModel})가 생각 중입니다...`);
+        
+        // ⛔️ [AI 디버그] 로그 창에 현재 상태 표시
+        const topCard = Object.values(room.discardPile).pop();
+        aiDebugLog.textContent = `[AI 턴] ${localGeminiModel} 생각 중...
+바닥 카드: ${topCard.suit} ${topCard.rank}
+공격 스택: ${room.attackStack || 0}`;
 
         setTimeout(() => {
             runGeminiAI(room, localGeminiKey, localGeminiModel)
                 .then(move => {
+                    // ⛔️ [AI 디버그] 1. Gemini의 원본 응답(JSON)을 로그에 표시
+                    aiDebugLog.textContent += `\n\n[Gemini 응답 (Raw)]\n${JSON.stringify(move, null, 2)}`;
+                    
                     const validation = validateAIMove(room, move, aiPlayerId);
+
+                    // ⛔️ [AI 디버그] 2. 검증 결과(Validation)를 로그에 표시
+                    aiDebugLog.textContent += `\n\n[검증 결과]\nisValid: ${validation.isValid}\nReason: ${validation.reason || 'N/A'}`;
 
                     if (validation.isValid) {
                         if (move.action === 'play') {
-                            console.log(`AI가 ${validation.card.suit} ${validation.card.rank}를 냅니다.`);
                             handlePlayCard(aiPlayerId, validation.card.id, move.changeSuitTo);
                         } else {
-                            console.log("AI가 카드를 뽑습니다.");
                             handleDrawCard(aiPlayerId);
                         }
                     } else {
-                        console.warn("AI의 제안이 유효하지 않음:", move, "이유:", validation.reason);
-                        console.log("AI가 대신 카드를 뽑습니다.");
+                        // 검증 실패 시 강제 드로우
                         handleDrawCard(aiPlayerId);
                     }
                 })
                 .catch(err => {
+                    // ⛔️ [AI 디버그] 3. API 호출 오류 시 로그에 표시
+                    aiDebugLog.textContent += `\n\n[API 오류]\n${err.message}`;
                     console.error("Gemini AI 실행 오류:", err);
-                    console.log("AI 오류로 인해 카드를 뽑습니다.");
-                    handleDrawCard(aiPlayerId); 
+                    handleDrawCard(aiPlayerId); // 오류 시 강제 드로우
                 })
                 .finally(() => {
                     setTimeout(() => { isAiThinking = false; }, 1000);
@@ -722,11 +695,13 @@ async function runGeminiAI(room, apiKey, modelName) {
     const topCard = room.discardPile[discardKeys[discardKeys.length - 1]];
     const attackStack = room.attackStack || 0;
 
-    const playableCards = aiHand.filter(card => canPlayCard(card, topCard, attackStack));
+    // ⛔️ [버그 수정] '낼 수 있는 카드 목록'을 미리 계산하던 '족쇄'를 제거합니다.
+    // const playableCards = aiHand.filter(card => canPlayCard(card, topCard, attackStack));
     
+    // ⛔️ [버그 수정] AI가 스스로 생각하도록 프롬프트를 수정합니다.
     const prompt = `
         당신은 원카드(One Card) 게임의 AI 플레이어입니다.
-        현재 게임 상황에 맞춰 *반드시* 다음 JSON 형식 중 하나로만 응답하세요.
+        현재 게임 상황을 보고, 내야 할 카드나 행동을 *반드시* 다음 JSON 형식 중 하나로만 응답하세요.
         다른 설명은 절대 추가하지 마세요.
 
         1. 카드 내기: {"action": "play", "suit": "heart", "rank": "5"}
@@ -746,19 +721,17 @@ async function runGeminiAI(room, apiKey, modelName) {
         - 내 손 패(AI): ${aiHand.map(c => `${c.suit} ${c.rank}`).join(', ') || '없음'}
         - 버려진 카드(맨 위): ${topCard.suit} ${topCard.rank}
         - 누적된 공격 스택: ${attackStack} 장
-        - 낼 수 있는 카드 목록: ${playableCards.map(c => `${c.suit} ${c.rank}`).join(', ') || '없음'}
         - 다른 플레이어 카드 수: ${Object.values(room.players).filter(p => !p.isAI && p.id !== aiPlayerId).map(p => `${p.name}: ${Object.keys(p.hand || {}).length}장`).join(', ')}
 
         [지시]
-        1. 낼 수 있는 카드 목록(${playableCards.length > 0 ? '있음' : '없음'})을 확인하세요.
-        2. 낼 카드가 없으면 {"action": "draw"}를 반환하세요.
-        3. 낼 카드가 있다면, 목록 중 가장 전략적인 카드 1개를 골라 JSON 형식으로 반환하세요.
-        4. (전략 팁: 공격 카드를 우선적으로 방어하거나, K/J/Q/7을 적절히 사용하세요.)
+        1. [현재 상황]과 [게임 규칙]을 바탕으로 낼 수 있는 카드가 있는지 판단하세요.
+        2. 낼 수 있는 카드가 없으면, 반드시 {"action": "draw"}를 반환하세요.
+        3. 낼 수 있는 카드가 있다면, 그 중 가장 전략적인 카드 1개를 골라 JSON 형식으로 반환하세요.
+        (전략 팁: 공격 카드를 우선적으로 방어하거나, K/J/Q/7을 적절히 사용하세요.)
         
         JSON 응답만 하세요:
     `;
 
-    // ⛔️ [AI] 동적 모델 URL
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     
     const response = await fetch(url, {
@@ -808,7 +781,7 @@ async function runGeminiAI(room, apiKey, modelName) {
  */
 function validateAIMove(room, move, aiPlayerId) {
     if (!move || !move.action) {
-        return { isValid: false, reason: "알 수 없는 행동" };
+        return { isValid: false, reason: "알 수 없는 행동 (No Action)" };
     }
 
     const aiHandList = Object.values(room.players[aiPlayerId].hand || {});
@@ -817,12 +790,17 @@ function validateAIMove(room, move, aiPlayerId) {
     const attackStack = room.attackStack || 0;
 
     if (move.action === 'draw') {
-        return { isValid: true };
+        // ⛔️ [AI 디버그] AI가 'draw'를 선택했을 때, 정말 낼 카드가 없었는지 확인
+        const playableCards = aiHandList.filter(card => canPlayCard(card, topCard, attackStack));
+        if (playableCards.length > 0) {
+            return { isValid: true, reason: "AI가 'draw' 선택 (낼 수 있는 카드가 있었음)" };
+        }
+        return { isValid: true, reason: "낼 카드가 없어 'draw' (정상)" };
     }
 
     if (move.action === 'play') {
         if (!move.suit || !move.rank) {
-            return { isValid: false, reason: "카드가 특정되지 않음" };
+            return { isValid: false, reason: "카드가 특정되지 않음 (Invalid JSON)" };
         }
 
         const cardInHand = aiHandList.find(c => c.suit === move.suit && c.rank === move.rank);
@@ -831,7 +809,7 @@ function validateAIMove(room, move, aiPlayerId) {
         }
 
         if (!canPlayCard(cardInHand, topCard, attackStack)) {
-            return { isValid: false, reason: "낼 수 없는 카드 (규칙 위반)" };
+            return { isValid: false, reason: `낼 수 없는 카드 (규칙 위반) - (My: ${cardInHand.suit} ${cardInHand.rank}, Top: ${topCard.suit} ${topCard.rank})` };
         }
         
         if (cardInHand.rank === '7') {
@@ -841,8 +819,8 @@ function validateAIMove(room, move, aiPlayerId) {
             }
         }
 
-        return { isValid: true, card: cardInHand };
+        return { isValid: true, card: cardInHand, reason: "정상 플레이" };
     }
     
-    return { isValid: false, reason: "알 수 없는 행동" };
+    return { isValid: false, reason: "알 수 없는 행동 (Unknown Action)" };
 }
