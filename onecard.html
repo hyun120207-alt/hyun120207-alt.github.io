@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>원카드 게임</title>
+    <title>원카드 게임 (Gemini AI Edition)</title>
     <link rel="stylesheet" href="onecard.css">
 </head>
 <body>
     <div id="onecard-game-container">
-        <!-- 로비 -->
         <div id="game-lobby">
             <h2>원카드 대기실</h2>
             <div id="room-list">
@@ -16,31 +15,32 @@
             </div>
             <div class="lobby-actions">
                 <input type="text" id="room-name-input" placeholder="방 제목">
-                <button id="create-room-btn">방 만들기</button>
+                
+                <div id="ai-options" style="margin-top: 10px; font-size: 0.9em;">
+                    <label>
+                        <input type="checkbox" id="ai-checkbox">
+                        AI 플레이어와 함께하기 (방장만 가능)
+                    </label>
+                    <input type="password" id="gemini-api-key-input" placeholder="Gemini API Key" style="display: none; margin-top: 5px; width: 95%;">
+                </div>
+                <button id="create-room-btn" style="margin-top: 10px;">방 만들기</button>
             </div>
         </div>
 
-        <!-- 게임 방 -->
         <div id="game-room" style="display: none;">
             <h2 id="room-title"></h2>
             <div id="game-board">
-                <!-- 상대방 손 -->
                 <div id="opponent-hand" class="opponent">
-                    <!-- 상대방 플레이어들이 동적으로 추가될 영역 -->
-                </div>
+                    </div>
 
-                <!-- 중앙 게임 영역 -->
                 <div id="game-center">
                     <div id="deck" class="card-pile">덱</div>
                     <div id="discard-pile" class="card-pile">
-                        <!-- 버린 카드가 표시될 영역 -->
-                    </div>
+                        </div>
                 </div>
 
-                <!-- 내 손 -->
                 <div id="my-hand" class="player-hand-container">
-                     <!-- 내 플레이어 정보가 동적으로 추가될 영역 -->
-                </div>
+                     </div>
             </div>
             <div class="room-actions">
                 <button id="start-game-btn" style="display: none;">게임 시작</button>
