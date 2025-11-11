@@ -409,21 +409,6 @@
             filter: brightness(0.9);
         }
 
-        #image-upload-label {
-            padding: 6px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 1.2rem; /* 이모지 크기 */
-            margin-right: 8px;
-            line-height: 1.5;
-            border: 1px solid var(--input-border);
-            background-color: var(--input-bg);
-            color: var(--input-text);
-        }
-        #image-upload-label:hover {
-            filter: brightness(0.9);
-        }
-
         #send-button {
             padding: 8px 14px;
             border: none;
@@ -773,6 +758,7 @@
         <header>
             <span>Firebase 실시간 채팅방</span> 
             <button id="onecard-game-button">원카드 게임</button>
+            <button id="reset-db-button">초기화</button>
         </header>
 
         <div class="chat-window" id="chat-window">
@@ -782,8 +768,6 @@
         <form id="chat-form">
             <input type="text" id="username-input" placeholder="이름" required>
             <input type="text" id="message-input" placeholder="메시지를 입력하세요..." required>
-            <input type="file" id="image-upload-input" accept="image/*" style="display: none;">
-            <label for="image-upload-input" id="image-upload-label" title="이미지 첨부">🖼️</label>
             <button type="button" id="ui-settings-button" title="UI 설정">⚙️</button>
             <button type="submit" id="send-button">전송</button>
         </form>
@@ -822,6 +806,12 @@
 
                     <label for="color-picker">글자 색상:</label>
                     <input type="color" id="color-picker" value="#000000" title="글자 색상">
+                    
+                    <label>이미지 첨부:</label>
+                    <div>
+                        <label for="image-upload-input" class="image-upload-label-modal">파일 선택 🖼️</label>
+                        <input type="file" id="image-upload-input" accept="image/*" style="display: none;">
+                    </div>
                 </div>
             </div>
         </div>
@@ -835,8 +825,9 @@
     </div>
 
     <script type="module">
-        import { app, database } from './firebase-config.js'; // 💡 수정: 설정 파일에서 storage 제외
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-app.js";
         import { 
+            getDatabase, 
             ref, 
             push, 
             onChildAdded, 
@@ -845,7 +836,28 @@
             orderByChild,
             remove
         } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-database.js";
+        
+        import { 
+            getStorage, 
+            ref as storageRef, 
+            uploadBytes, 
+            getDownloadURL 
+        } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-storage.js";
 
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyB5TAYEoAEawpaYr1tR373OhCYumOc4B7o",
+            authDomain: "chat-33290.firebaseapp.com",
+            databaseURL: "https://chat-33290-default-rtdb.firebaseio.com",
+            projectId: "chat-33290",
+            storageBucket: "chat-33290.firebasestorage.app", 
+            messagingSenderId: "894357766876",
+            appId: "1:894357766876:web:bd27cd3f1da7e29b3eaa19"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const database = getDatabase(app);
+        const storage = getStorage(app); 
         const messagesRef = ref(database, 'messages');
 
         // --- DOM 요소 가져오기 ---
@@ -854,8 +866,8 @@
         const messageInput = document.getElementById('message-input');
         const messageList = document.getElementById('message-list');
         const chatWindow = document.getElementById('chat-window');
+        const resetButton = document.getElementById('reset-db-button');
         const sendButton = document.getElementById('send-button'); 
-        const imageUploadInput = document.getElementById('image-upload-input'); // 💡 수정: 메인 폼의 input 참조
 
         // --- 통합 UI 설정 모달 요소 ---
         const uiSettingsModal = document.getElementById('ui-settings-modal');
@@ -867,6 +879,7 @@
         const themeButtons = uiSettingsModal.querySelectorAll('.modal-theme-btn');
         const fontSizeSelect = uiSettingsModal.querySelector('#font-size-select');
         const colorPicker = uiSettingsModal.querySelector('#color-picker');
+        const imageUploadInput = uiSettingsModal.querySelector('#image-upload-input');
 
         // ----------------------------------------
         // 🔹 통합 UI 설정 기능
@@ -964,52 +977,54 @@
         });
 
         // ----------------------------------------
-        // 🔹 이미지 메시지 전송 (Base64 인코딩)
+        // 🔹 이미지 메시지 전송 (파일 선택 시)
         // ----------------------------------------
         imageUploadInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             const username = usernameInput.value.trim();
 
-            if (!file) return;
+            if (!file) return; 
 
             if (!username) {
                 alert('이미지를 업로드하려면 먼저 이름을 입력하세요.');
-                imageUploadInput.value = '';
+                imageUploadInput.value = ''; 
                 return;
             }
-
-            // Firebase RTDB는 큰 데이터에 적합하지 않으므로 파일 크기 제한을 낮춥니다. (예: 1MB)
-            if (file.size > 1 * 1024 * 1024) {
-                alert('1MB 이하의 이미지만 업로드할 수 있습니다.');
-                imageUploadInput.value = '';
-                return;
+            
+            if (file.size > 5 * 1024 * 1024) {
+                 alert('5MB 이하의 이미지만 업로드할 수 있습니다.');
+                 imageUploadInput.value = '';
+                 return;
             }
 
             sendButton.disabled = true;
-            sendButton.textContent = '인코딩 중...';
+            sendButton.textContent = '업로드 중...';
 
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                const base64String = event.target.result;
+            const filePath = `chat_images/${Date.now()}_${file.name}`;
+            const sRef = storageRef(storage, filePath);
 
-                push(messagesRef, {
-                    username,
-                    imageBase64: base64String,
-                    timestamp: serverTimestamp()
+            uploadBytes(sRef, file)
+                .then((snapshot) => {
+                    return getDownloadURL(snapshot.ref);
+                })
+                .then((downloadURL) => {
+                    push(messagesRef, {
+                        username,
+                        imageUrl: downloadURL, 
+                        timestamp: serverTimestamp()
+                    });
+
+                    imageUploadInput.value = ''; 
+                    sendButton.disabled = false;
+                    sendButton.textContent = '전송';
+                    closeModal(); // 이미지 업로드 후 모달 닫기
+                })
+                .catch((error) => {
+                    console.error('이미지 업로드 오류:', error);
+                    alert('이미지 업로드에 실패했습니다. (Storage 설정을 확인하세요)');
+                    sendButton.disabled = false;
+                    sendButton.textContent = '전송';
                 });
-
-                imageUploadInput.value = '';
-                sendButton.disabled = false;
-                sendButton.textContent = '전송';
-            };
-            reader.onerror = (error) => {
-                console.error('File reading error:', error);
-                alert('파일을 읽는 중 오류가 발생했습니다.');
-                sendButton.disabled = false;
-                sendButton.textContent = '전송';
-            };
-
-            reader.readAsDataURL(file); // 파일을 Base64 데이터 URL로 읽기
         });
 
 
@@ -1039,16 +1054,14 @@
 
                 li.appendChild(messageText);
 
-            } else if (data.imageBase64) { // 'imageUrl' 대신 'imageBase64' 확인
+            } else if (data.imageUrl) {
                 const messageImage = document.createElement('img');
                 messageImage.className = 'message-image';
-                messageImage.src = data.imageBase64; // src에 Base64 데이터 URL 직접 설정
+                messageImage.src = data.imageUrl;
                 messageImage.alt = '채팅 이미지';
                 
-                // Base64 이미지는 새 창에서 열 필요가 없을 수 있지만, 원본 크기로 보는 기능을 위해 유지
                 messageImage.addEventListener('click', () => {
-                    const newWindow = window.open();
-                    newWindow.document.write('<img src="' + data.imageBase64 + '" alt="채팅 이미지" />');
+                    window.open(data.imageUrl, '_blank');
                 });
                 
                 li.appendChild(messageImage);
@@ -1058,6 +1071,29 @@
             messageList.appendChild(li);
             chatWindow.scrollTop = chatWindow.scrollHeight;
         });
+
+        // ----------------------------------------
+        // 🔹 DB 초기화 기능 (기존과 동일)
+        // ----------------------------------------
+        resetButton.addEventListener('click', () => {
+            const password = prompt('데이터베이스를 초기화하려면 관리자 비밀번호(비밀번호0207)를 입력하세요:');
+            
+            if (password === '비밀번호0207') {
+                remove(messagesRef)
+                    .then(() => {
+                        alert('채팅 기록이 모두 삭제되었습니다.');
+                        messageList.innerHTML = '';
+                    })
+                    .catch((error) => {
+                        console.error('DB 삭제 오류:', error);
+                        alert('데이터 삭제 중 오류가 발생했습니다.');
+                    });
+            } else if (password !== null) { 
+                alert('비밀번호가 일치하지 않습니다.');
+            }
+        });
+
+    </script>
 
 </body>
 </html>
