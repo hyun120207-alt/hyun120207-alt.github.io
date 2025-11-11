@@ -1,0 +1,179 @@
+/* 기본 스타일 */
+body {
+    font-family: sans-serif;
+    background-color: #0f4c75;
+    color: #bbe1fa;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    box-sizing: border-box;
+}
+
+#onecard-game-container {
+    width: 100%;
+    max-width: 1600px;
+    height: 98%;
+    background-color: #1b262c;
+    border-radius: 10px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    padding: 20px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 로비 스타일 */
+#game-lobby {
+    text-align: center;
+}
+
+#room-list {
+    margin: 20px auto;
+    padding: 10px;
+    background: #0f4c75;
+    border-radius: 5px;
+    height: 300px;
+    overflow-y: auto;
+    max-width: 500px;
+}
+
+.room-item {
+    padding: 15px;
+    margin-bottom: 10px;
+    background: #3282b8;
+    border-radius: 5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+}
+.room-item:hover {
+    background: #4f8a8b;
+}
+
+.lobby-actions input {
+    padding: 10px;
+    border-radius: 5px;
+    border: none;
+    margin-right: 10px;
+}
+
+.lobby-actions button, .room-actions button {
+    padding: 10px 20px;
+    border-radius: 5px;
+    border: none;
+    background-color: #3282b8;
+    color: #fff;
+    cursor: pointer;
+    font-weight: bold;
+}
+.lobby-actions button:hover, .room-actions button:hover {
+    background-color: #4f8a8b;
+}
+
+/* 게임 방 스타일 */
+#game-room {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+#game-board {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    border: 2px solid #0f4c75;
+    border-radius: 10px;
+    padding: 20px;
+    position: relative;
+}
+
+.player-hand {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 120px;
+    flex-wrap: wrap;
+}
+
+.opponent {
+    margin-bottom: 10px;
+}
+.opponent-name {
+    text-align: center;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.player-container.active-turn {
+    box-shadow: 0 0 15px 5px #3282b8;
+    border-radius: 10px;
+}
+
+#game-center {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 30px;
+    margin: 20px 0;
+}
+
+.card-pile {
+    width: 80px;
+    height: 110px;
+    border: 2px dashed #bbe1fa;
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 1.2rem;
+    background-color: rgba(0,0,0,0.2);
+}
+
+.card {
+    width: 70px;
+    height: 100px;
+    border-radius: 5px;
+    background-color: #fff;
+    color: #000;
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 5px;
+    box-sizing: border-box;
+    position: relative;
+    margin: 0 5px;
+    user-select: none;
+}
+
+.card.back {
+    background-color: #5a5a5a;
+}
+
+.card .rank {
+    font-size: 1.2rem;
+    font-weight: bold;
+}
+.card .rank.bottom {
+    transform: rotate(180deg);
+}
+.card .suit {
+    font-size: 2.5rem;
+    text-align: center;
+    line-height: 1;
+}
+
+.card.spade, .card.club { color: #000; }
+.card.heart, .card.diamond { color: #f00; }
+.card.joker { color: purple; }
+
+.room-actions {
+    padding-top: 20px;
+    text-align: center;
+}
