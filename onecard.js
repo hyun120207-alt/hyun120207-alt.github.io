@@ -22,6 +22,9 @@ const gameLobby = document.getElementById('game-lobby');
 const roomList = document.getElementById('room-list');
 const createRoomBtn = document.getElementById('create-room-btn');
 const roomNameInput = document.getElementById('room-name-input');
+// ⛔️ [AI] AI 관련 DOM 요소 추가
+const aiCheckbox = document.getElementById('ai-checkbox');
+const geminiApiKeyInput = document.getElementById('gemini-api-key-input');
 
 const gameRoom = document.getElementById('game-room');
 const roomTitle = document.getElementById('room-title');
@@ -42,29 +45,76 @@ let currentPlayer = {
 };
 let currentRoomRef = null;
 
+// ⛔️ [AI] AI 관련 전역 변수
+let localGeminiKey = null; // 방장의 브라우저 메모리에만 API 키 저장
+let isAiThinking = false;  // AI가 API 호출 중일 때 중복 실행 방지 락(Lock)
+const AI_PLAYER_ID = "player_AI_Gemini"; // AI 플레이어 고유 ID
+
+// ⛔️ [AI] AI 옵션 UI 토글
+aiCheckbox.addEventListener('change', () => {
+    geminiApiKeyInput.style.display = aiCheckbox.checked ? 'block' : 'none';
+});
+
+
 // --- 로비 로직 ---
 
 // 방 만들기
 createRoomBtn.addEventListener('click', () => {
     const roomName = roomNameInput.value.trim();
-    if (roomName) {
-        const newRoomRef = push(roomsRef);
-        const roomId = newRoomRef.key;
-        set(newRoomRef, {
-            name: roomName,
-            players: {},
-            state: 'waiting',
-            host: currentPlayer.id
-        }).then(() => {
-            enterRoom(roomId, roomName);
-        });
-        roomNameInput.value = '';
-    } else {
+    if (!roomName) {
         alert('방 제목을 입력하세요.');
+        return;
     }
+    
+    // ⛔️ [AI] AI 옵션 확인
+    const isWithAI = aiCheckbox.checked;
+    if (isWithAI) {
+        localGeminiKey = geminiApiKeyInput.value.trim();
+        if (!localGeminiKey) {
+            alert('AI 플레이어를 포함하려면 Gemini API 키를 입력해야 합니다.');
+            return;
+        }
+    }
+    
+    // ⛔️ [AI] 방 생성 시 AI 플레이어 추가 로직
+    if (!currentPlayer.name) {
+        const playerName = prompt('게임에서 사용할 이름을 입력하세요:');
+        if (!playerName) return;
+        currentPlayer.name = playerName;
+    }
+
+    const newRoomRef = push(roomsRef);
+    const roomId = newRoomRef.key;
+
+    // 1. 방 기본 정보 설정
+    set(newRoomRef, {
+        name: roomName,
+        players: {}, // 플레이어는 enterRoom에서 각자 추가
+        state: 'waiting',
+        host: currentPlayer.id
+    }).then(() => {
+        // 2. [AI] 방장이 AI 플레이어를 DB에 추가
+        if (isWithAI) {
+            const aiPlayerRef = ref(database, `onecard_rooms/${roomId}/players/${AI_PLAYER_ID}`);
+            set(aiPlayerRef, { 
+                name: "Gemini AI", 
+                isAI: true, 
+                hand: {} 
+            });
+        }
+        
+        // 3. 방장 입장
+        enterRoom(roomId, roomName);
+    });
+    
+    roomNameInput.value = '';
+    aiCheckbox.checked = false;
+    geminiApiKeyInput.style.display = 'none';
+    geminiApiKeyInput.value = '';
 });
 
-// 방 목록 실시간 업데이트
+
+// 방 목록 실시간 업데이트 (기존과 동일)
 onValue(roomsRef, (snapshot) => {
     roomList.innerHTML = '';
     if (snapshot.exists()) {
@@ -73,6 +123,7 @@ onValue(roomsRef, (snapshot) => {
             const roomData = childSnapshot.val();
             const playerCount = roomData.players ? Object.keys(roomData.players).length : 0;
             
+            // ⛔️ [AI] 최대 인원 6명으로 유지 (AI 포함)
             if (playerCount < 6 && roomData.state === 'waiting') {
                 const roomItem = document.createElement('div');
                 roomItem.className = 'room-item';
@@ -119,8 +170,11 @@ function enterRoom(roomId, name) {
             leaveRoom();
             return;
         }
-        // ⛔️ 수정: roomData를 전달하여 턴 상태를 올바르게 표시
-        updatePlayerHands(roomData.players, roomData);
+        
+        // ⛔️ [AI] AI가 아닌 플레이어만 UI에 렌더링 (AI는 opponentHand에 포함됨)
+        if (roomData.players && roomData.players[currentPlayer.id]) {
+            updatePlayerHands(roomData.players, roomData);
+        }
         updateGameBoard(roomData);
 
         // 방장인 경우에만 게임 시작 버튼 표시
@@ -129,6 +183,9 @@ function enterRoom(roomId, name) {
         } else {
             startGameBtn.style.display = 'none';
         }
+
+        // ⛔️ [AI] AI 턴 처리 로직 (방장만 실행)
+        handleAITurn(roomData);
     });
 }
 
@@ -138,6 +195,12 @@ function leaveRoom() {
         onDisconnect(currentPlayer.playerRef).cancel();
     }
     
+    // ⛔️ [AI] 방장이 나가면 AI도 함께 제거
+    if (currentRoomRef) {
+        // 이 부분은 복잡해질 수 있으므로, 방장이 나갈 때 방 자체가 정리되는 로직이 필요할 수 있음
+        // 지금은 AI가 포함된 방을 나갈 때의 별도 처리는 생략
+    }
+
     if(currentRoomRef) {
         onValue(currentRoomRef, () => {}); // 리스너 제거
         currentRoomRef = null;
@@ -145,6 +208,9 @@ function leaveRoom() {
 
     currentPlayer.roomId = null;
     currentPlayer.playerRef = null;
+    
+    // ⛔️ [AI] 로컬 API 키 초기화
+    localGeminiKey = null;
 
     gameLobby.style.display = 'block';
     gameRoom.style.display = 'none';
@@ -153,18 +219,25 @@ function leaveRoom() {
 leaveRoomBtn.addEventListener('click', leaveRoom);
 
 function updatePlayerHands(players, roomData) {
-    // ⛔️ 수정: roomData가 없을 경우를 대비한 방어 코드
     if (!players || !roomData) return;
 
     opponentHand.innerHTML = '';
     myHand.innerHTML = '';
 
-    const playerIds = Object.keys(players);
+    // ⛔️ [AI] AI 플레이어를 제외한 실제 플레이어 ID 목록
+    const playerIds = Object.keys(players).filter(id => !players[id].isAI);
     const myPlayerIndex = playerIds.indexOf(currentPlayer.id);
-    
-    // 플레이어 순서를 자신을 기준으로 재정렬 (UI 표시용)
-    const orderedPlayerIds = [...playerIds.slice(myPlayerIndex), ...playerIds.slice(0, myPlayerIndex)];
 
+    // ⛔️ [AI] AI 플레이어 ID 목록
+    const aiPlayerIds = Object.keys(players).filter(id => players[id].isAI);
+
+    // ⛔️ [AI] UI 표시 순서: 나 -> 다른 플레이어 -> AI
+    const orderedPlayerIds = [
+        ...playerIds.slice(myPlayerIndex), 
+        ...playerIds.slice(0, myPlayerIndex)
+    ];
+
+    // 나와 다른 사람 플레이어 렌더링
     orderedPlayerIds.forEach(playerId => {
         const player = players[playerId];
         const hand = player.hand || {};
@@ -178,6 +251,7 @@ function updatePlayerHands(players, roomData) {
         }
 
         if (playerId === currentPlayer.id) {
+            // 내 손
             playerContainer.innerHTML = `<div class="player-name">${player.name} (나)</div>`;
             const myHandDiv = document.createElement('div');
             myHandDiv.className = 'player-hand';
@@ -189,6 +263,7 @@ function updatePlayerHands(players, roomData) {
             playerContainer.appendChild(myHandDiv);
             myHand.appendChild(playerContainer);
         } else {
+            // 다른 사람 (상대방)
             playerContainer.innerHTML = `<div class="player-name">${player.name} (${cardCount}장)</div>`;
             const opponentCardsDiv = document.createElement('div');
             opponentCardsDiv.className = 'player-hand';
@@ -200,26 +275,43 @@ function updatePlayerHands(players, roomData) {
             opponentHand.appendChild(playerContainer);
         }
     });
+    
+    // AI 플레이어 렌더링 (항상 상대방)
+    aiPlayerIds.forEach(aiPlayerId => {
+        const player = players[aiPlayerId];
+        const hand = player.hand || {};
+        const cardCount = Object.keys(hand).length;
+        const isCurrentTurn = roomData.currentPlayerTurn === aiPlayerId;
+        
+        const playerContainer = document.createElement('div');
+        playerContainer.className = 'player-container ai-player'; // AI 식별 클래스
+        if (isCurrentTurn) {
+            playerContainer.classList.add('active-turn');
+        }
+        
+        playerContainer.innerHTML = `<div class="player-name">${player.name} (${cardCount}장)</div>`;
+        const opponentCardsDiv = document.createElement('div');
+        opponentCardsDiv.className = 'player-hand';
+        for (let i = 0; i < cardCount; i++) {
+            const cardDiv = createCardDiv({ back: true });
+            opponentCardsDiv.appendChild(cardDiv);
+        }
+        playerContainer.appendChild(opponentCardsDiv);
+        opponentHand.appendChild(playerContainer);
+    });
 }
+
 
 function updateGameBoard(roomData) {
     if (!roomData) return;
     
     if (roomData.state === 'playing') {
-        // 💡 수정: topCardId를 사용하여 안정적으로 topCard 정보 가져오기
-        const topCardId = roomData.topCardId;
-        if (topCardId && roomData.discardPile[topCardId]) {
-            const topCard = roomData.discardPile[topCardId];
+        const discardData = roomData.discardPile || {};
+        const topCardId = Object.keys(discardData).pop();
+        if (topCardId) {
+            const topCard = discardData[topCardId];
             discardPile.innerHTML = '';
-            const cardDiv = createCardDiv(topCard);
-            
-            // 💡 추가: 7번 카드로 변경된 무늬가 있다면 표시
-            if (roomData.activeSuit) {
-                const suitIcon = { heart: '♥', diamond: '♦', club: '♣', spade: '♠' }[roomData.activeSuit];
-                cardDiv.innerHTML += `<div style="position: absolute; top: 5px; right: 5px; font-size: 1.5rem; color: ${['heart', 'diamond'].includes(roomData.activeSuit) ? 'red' : 'black'};">${suitIcon}</div>`;
-            }
-            
-            discardPile.appendChild(cardDiv);
+            discardPile.appendChild(createCardDiv(topCard));
         }
          // 덱 카드 수 표시
         const deckCount = roomData.deck ? roomData.deck.length : 0;
@@ -252,6 +344,12 @@ function createCardDiv(card) {
     let rank = card.rank;
     let suitSymbol = '';
 
+    // ⛔️ [AI] 7-suit-change 카드 렌더링 수정
+    if (card.rank === '7-suit-change') {
+        rank = '7'; // 7로 표시
+        cardDiv.classList.add('suit-change-effect'); // CSS로 특별한 효과
+    }
+
     if (card.rank === 'Joker') {
         rank = card.color === 'color' ? 'C.J' : 'B.J';
         suitSymbol = '🃏';
@@ -273,83 +371,90 @@ function createCardDiv(card) {
 
 // --- 게임 플레이 로직 ---
 
+// ⛔️ [AI] 카드 유효성 검사 로직 분리
+function canPlayCard(cardToPlay, topCard, currentAttack) {
+    const isAttackCard = ['A', '2', 'Joker'].includes(cardToPlay.rank);
+
+    if (currentAttack > 0) {
+        // 공격 받는 중: 같은 등급의 공격 카드, 또는 흑백 조커(5), 컬러 조커(7)
+        if (isAttackCard) {
+            if (topCard.rank === 'Joker') {
+                // 조커 공격은 조커로만 방어 가능
+                return cardToPlay.rank === 'Joker';
+            }
+            // A, 2 공격은 A, 2, 조커로 방어 가능
+            return cardToPlay.rank === topCard.rank || cardToPlay.rank === 'Joker';
+        }
+        return false; // 공격 중에는 공격 카드 외에는 낼 수 없음
+    } else {
+        // 일반 상황: 무늬 또는 등급이 같거나, 조커 카드일 경우
+        return cardToPlay.suit === topCard.suit || 
+               cardToPlay.rank === topCard.rank || 
+               cardToPlay.rank === 'Joker' ||
+               topCard.rank === '7-suit-change'; // 7-suit-change 카드가 위면 무늬만 맞추면 됨
+    }
+}
+
+
 // 내 손의 카드 클릭
 myHand.addEventListener('click', (e) => {
     const cardDiv = e.target.closest('.card');
     if (!cardDiv || !cardDiv.dataset.cardId) return;
 
     const cardId = cardDiv.dataset.cardId;
-    playCard(cardId);
+    handlePlayCard(currentPlayer.id, cardId);
 });
 
 // 덱 클릭
 const deckPile = document.getElementById('deck');
 deckPile.addEventListener('click', () => {
-    drawCard();
+    handleDrawCard(currentPlayer.id);
 });
 
 
-function playCard(cardId) {
+// ⛔️ [AI] 카드 내기 로직 (플레이어 ID 기반으로 변경)
+function handlePlayCard(playerId, cardId, chosenSuit = null) {
     runTransaction(currentRoomRef, (room) => {
-        if (!room || room.state !== 'playing' || !room.players[currentPlayer.id].hand[cardId]) return;
-        if (room.currentPlayerTurn !== currentPlayer.id) {
-            alert('당신의 턴이 아닙니다.');
+        if (!room || room.state !== 'playing') return;
+        if (room.currentPlayerTurn !== playerId) {
+            // 사람이 클릭한 경우에만 경고
+            if (playerId === currentPlayer.id) alert('당신의 턴이 아닙니다.');
             return;
         }
-
-        const cardToPlay = room.players[currentPlayer.id].hand[cardId];
-        const topCard = room.discardPile[room.topCardId]; // 💡 수정: topCardId로 안정적으로 참조
-        const currentAttack = room.attackStack || 0;
-        const activeSuit = room.activeSuit; // 💡 추가: 7카드로 변경된 무늬
-
-        // 유효성 검사 로직 개선
-        let isValidMove = false;
-        const isAttackCard = ['A', '2', 'Joker'].includes(cardToPlay.rank);
-
-        if (currentAttack > 0) {
-            // 공격 받는 중: 같은 등급의 공격 카드만 낼 수 있음
-            if (isAttackCard && cardToPlay.rank === topCard.rank) {
-                isValidMove = true;
-            }
-        } else if (activeSuit) {
-            // 7카드로 무늬가 변경된 경우: 변경된 무늬와 일치하거나, 7카드거나, 조커 카드일 경우
-            if (cardToPlay.suit === activeSuit || cardToPlay.rank === '7' || cardToPlay.rank === 'Joker') {
-                isValidMove = true;
-            }
-        } else {
-            // 일반 상황: 무늬 또는 등급이 같거나, 조커 카드일 경우
-            if (cardToPlay.suit === topCard.suit || cardToPlay.rank === topCard.rank || cardToPlay.rank === 'Joker') {
-                isValidMove = true;
-            }
+        if (!room.players[playerId] || !room.players[playerId].hand[cardId]) {
+             // AI가 없는 카드를 내려고 할 수 있음 (환각)
+            console.warn(`[${playerId}]가 손에 없는 카드(${cardId})를 내려고 시도했습니다.`);
+            return; // 트랜잭션 중단
         }
 
-        if (!isValidMove) {
-            alert('낼 수 없는 카드입니다.');
+        const cardToPlay = room.players[playerId].hand[cardId];
+        const topCard = Object.values(room.discardPile).pop();
+        const currentAttack = room.attackStack || 0;
+
+        // ⛔️ [AI] 분리된 유효성 검사 함수 사용
+        if (!canPlayCard(cardToPlay, topCard, currentAttack)) {
+            if (playerId === currentPlayer.id) alert('낼 수 없는 카드입니다.');
             return;
         }
 
         // 카드 이동
-        delete room.players[currentPlayer.id].hand[cardId];
+        delete room.players[playerId].hand[cardId];
         room.discardPile[cardId] = cardToPlay;
-        room.topCardId = cardId; // 💡 수정: topCardId를 명시적으로 업데이트
         
-        // 7카드로 인해 변경된 무늬가 있었다면 초기화
-        if (room.activeSuit) {
-            delete room.activeSuit;
-        }
-
         // 승리 조건 확인
-        if (Object.keys(room.players[currentPlayer.id].hand).length === 0) {
+        if (Object.keys(room.players[playerId].hand).length === 0) {
             room.state = 'finished';
-            room.winner = room.players[currentPlayer.id].name;
+            room.winner = room.players[playerId].name;
             return room;
         }
 
         // 특수 카드 로직
-        const playerIds = Object.keys(room.players);
-        let currentPlayerIndex = playerIds.indexOf(currentPlayer.id);
+        const playerIds = Object.keys(room.players); // ⛔️ [AI] AI 포함된 전체 플레이어
+        let currentPlayerIndex = playerIds.indexOf(playerId);
         let nextPlayerIndex = (currentPlayerIndex + 1) % playerIds.length;
         
+        const isAttackCard = ['A', '2', 'Joker'].includes(cardToPlay.rank);
+
         if (isAttackCard) {
             switch (cardToPlay.rank) {
                 case 'A': room.attackStack = (room.attackStack || 0) + 3; break;
@@ -357,25 +462,36 @@ function playCard(cardId) {
                 case 'Joker': room.attackStack = (room.attackStack || 0) + (cardToPlay.color === 'color' ? 7 : 5); break;
             }
         } else {
-            // 일반 카드 처리
+             // 일반 카드 처리
             switch (cardToPlay.rank) {
                 case 'J': nextPlayerIndex = (nextPlayerIndex + 1) % playerIds.length; break;
                 case 'Q': 
+                    // ⛔️ [AI] Q 로직 수정 (방향 전환 플래그 사용이 더 간단하나, 기존 로직 유지)
+                    // (이전 로직은 플레이어 순서가 고정되어 있다는 가정 하에 작동하므로, AI가 껴도 동일하게 작동)
                     const reversedPlayerIds = [...playerIds].reverse();
-                    const reversedCurrentIndex = reversedPlayerIds.indexOf(currentPlayer.id);
+                    const reversedCurrentIndex = reversedPlayerIds.indexOf(playerId);
                     const reversedNextPlayerIndex = (reversedCurrentIndex + 1) % reversedPlayerIds.length;
                     const nextPlayerId = reversedPlayerIds[reversedNextPlayerIndex];
                     nextPlayerIndex = playerIds.indexOf(nextPlayerId);
                     break;
                 case 'K': nextPlayerIndex = currentPlayerIndex; break; // 턴 유지
                 case '7': 
-                    // 💡 수정: prompt 대신 activeSuit 상태만 변경 (UI는 추후 개선)
-                    const newSuit = prompt('변경할 무늬를 입력하세요 (heart, diamond, club, spade)');
-                    if (['heart', 'diamond', 'club', 'spade'].includes(newSuit)) {
-                        room.activeSuit = newSuit;
+                    let newSuit = null;
+                    if (playerId === currentPlayer.id) {
+                        // 사람이 7을 냄
+                        newSuit = prompt('변경할 무늬를 입력하세요 (heart, diamond, club, spade)');
                     } else {
-                        alert('잘못된 무늬입니다. 기본 무늬로 유지됩니다.');
-                        // 7을 냈지만 무늬 변경을 안한 경우, 원래 무늬가 유지됨
+                        // AI가 7을 냄
+                        newSuit = chosenSuit; // Gemini가 선택한 무늬
+                    }
+                    
+                    if (['heart', 'diamond', 'club', 'spade'].includes(newSuit)) {
+                        const suitChangeCardId = `suit_change_${Date.now()}`;
+                        // ⛔️ [AI] 7-suit-change 카드는 원본 카드의 ID를 가지지 않도록 수정 (ID 중복 방지)
+                        room.discardPile[suitChangeCardId] = { id: suitChangeCardId, suit: newSuit, rank: '7-suit-change' };
+                    } else {
+                        if (playerId === currentPlayer.id) alert('잘못된 무늬입니다. 기본 무늬로 유지됩니다.');
+                        // AI가 잘못된 무늬를 줬거나 사람이 취소하면, 그냥 7 카드만 낸 걸로.
                     }
                     break;
             }
@@ -386,39 +502,53 @@ function playCard(cardId) {
     });
 }
 
-function drawCard() {
+// ⛔️ [AI] 카드 뽑기 로직 (플레이어 ID 기반으로 변경)
+function handleDrawCard(playerId) {
      runTransaction(currentRoomRef, (room) => {
-        if (!room || room.state !== 'playing' || room.currentPlayerTurn !== currentPlayer.id) return;
+        if (!room || room.state !== 'playing') return;
+        if (room.currentPlayerTurn !== playerId) return;
+        if (!room.players[playerId]) return; // 방금 나간 플레이어일 수 있음
 
         const currentAttack = room.attackStack || 0;
         if (currentAttack > 0) {
             // 공격 스택만큼 카드 먹기
             for (let i = 0; i < currentAttack; i++) {
-                if (!room.deck || room.deck.length === 0) {
-                    // 💡 추가: 덱이 비었으면 버린 덱을 섞어서 새로 만듦
-                    const newDeck = shuffleDiscardIntoDeck(room);
-                    if (newDeck) room.deck = newDeck;
-                    else break; // 섞을 카드도 없으면 중단
+                if (room.deck && room.deck.length > 0) {
+                    const drawnCard = room.deck.pop();
+                    if (!room.players[playerId].hand) room.players[playerId].hand = {}; // 방어 코드
+                    room.players[playerId].hand[drawnCard.id] = drawnCard;
+                } else {
+                    // ⛔️ [AI] 덱 리필 로직 (간단하게)
+                    if (Object.keys(room.discardPile).length > 1) {
+                        room = refillDeck(room);
+                        i--; // 다시 뽑기
+                    } else {
+                        break; // 더 이상 뽑을 카드 없음
+                    }
                 }
-                const drawnCard = room.deck.pop();
-                room.players[currentPlayer.id].hand[drawnCard.id] = drawnCard;
             }
             room.attackStack = 0; // 공격 스택 초기화
         } else {
             // 일반 드로우
-            if (!room.deck || room.deck.length === 0) {
-                // 💡 추가: 덱이 비었으면 버린 덱을 섞어서 새로 만듦
-                const newDeck = shuffleDiscardIntoDeck(room);
-                if (newDeck) room.deck = newDeck;
-                else return; // 섞을 카드도 없으면 아무것도 하지 않음
+            if (room.deck && room.deck.length > 0) {
+                const drawnCard = room.deck.pop();
+                if (!room.players[playerId].hand) room.players[playerId].hand = {};
+                room.players[playerId].hand[drawnCard.id] = drawnCard;
+            } else {
+                 if (Object.keys(room.discardPile).length > 1) {
+                    room = refillDeck(room);
+                    const drawnCard = room.deck.pop();
+                    if (!room.players[playerId].hand) room.players[playerId].hand = {};
+                    room.players[playerId].hand[drawnCard.id] = drawnCard;
+                 } else {
+                    if (playerId === currentPlayer.id) alert('덱에 카드가 없습니다!');
+                 }
             }
-            const drawnCard = room.deck.pop();
-            room.players[currentPlayer.id].hand[drawnCard.id] = drawnCard;
         }
 
         // 턴 넘기기
         const playerIds = Object.keys(room.players);
-        const currentPlayerIndex = playerIds.indexOf(currentPlayer.id);
+        const currentPlayerIndex = playerIds.indexOf(playerId);
         const nextPlayerIndex = (currentPlayerIndex + 1) % playerIds.length;
         room.currentPlayerTurn = playerIds[nextPlayerIndex];
 
@@ -426,28 +556,22 @@ function drawCard() {
     });
 }
 
-// 💡 추가: 버린 덱을 섞어 새 덱으로 만드는 헬퍼 함수
-function shuffleDiscardIntoDeck(room) {
-    const topCardId = room.topCardId;
-    const cardsToShuffle = [];
-    for (const cardId in room.discardPile) {
-        if (cardId !== topCardId) {
-            cardsToShuffle.push(room.discardPile[cardId]);
-            delete room.discardPile[cardId];
-        }
-    }
+// ⛔️ [AI] 덱 리필 함수
+function refillDeck(room) {
+    console.log("덱 리필 실행!");
+    const discardKeys = Object.keys(room.discardPile);
+    const topCardId = discardKeys.pop(); // 맨 위 카드 ID
+    const topCard = room.discardPile[topCardId]; // 맨 위 카드 객체
 
-    if (cardsToShuffle.length === 0) {
-        alert('더 이상 카드가 없어 게임이 무승부로 종료됩니다.');
-        room.state = 'finished';
-        room.winner = '무승부';
-        return null;
-    }
-
+    // 나머지 카드들
+    const cardsToShuffle = discardKeys.map(key => room.discardPile[key]);
     shuffleDeck(cardsToShuffle);
-    return cardsToShuffle;
-}
 
+    room.deck = (room.deck || []).concat(cardsToShuffle); // 기존 덱에 합치기
+    room.discardPile = { [topCardId]: topCard }; // 맨 위 카드만 남기기
+    
+    return room;
+}
 
 
 // --- 게임 시작 로직 ---
@@ -455,6 +579,7 @@ startGameBtn.addEventListener('click', () => {
     runTransaction(currentRoomRef, (room) => {
         if (room && room.state === 'waiting' && room.host === currentPlayer.id) {
             const playerIds = Object.keys(room.players);
+            // ⛔️ [AI] AI 포함 2명 이상이면 시작 가능
             if (playerIds.length < 2) {
                 alert('플레이어가 2명 이상이어야 게임을 시작할 수 있습니다.');
                 return; // Abort transaction
@@ -476,19 +601,16 @@ startGameBtn.addEventListener('click', () => {
 
             // 3. 첫 번째 버리는 카드 설정
             let discardCard = deck.pop();
-            // 첫 카드가 공격 카드나 특수 카드(J,Q,K,7)이면 덱 맨 밑으로 보내고 다시 뽑기
             while (['A', '2', 'Joker', 'J', 'Q', 'K', '7'].includes(discardCard.rank)) {
-                deck.unshift(discardCard);
+                deck.unshift(discardCard); // 덱 맨 밑으로
                 discardCard = deck.pop();
             }
             
             room.deck = deck;
             room.discardPile = { [discardCard.id]: discardCard };
-            room.topCardId = discardCard.id; // 💡 추가: 첫 카드의 topCardId 설정
             room.currentPlayerTurn = playerIds[0]; // 첫 플레이어부터 시작
             room.state = 'playing';
             room.attackStack = 0; // 공격 스택 초기화
-            delete room.activeSuit; // 💡 추가: activeSuit 초기화
         }
         return room;
     });
@@ -514,4 +636,200 @@ function shuffleDeck(deck) {
         const j = Math.floor(Math.random() * (i + 1));
         [deck[i], deck[j]] = [deck[j], deck[i]];
     }
+}
+
+
+// ===========================================
+// ⛔️ [AI] Gemini AI 로직 섹션
+// ===========================================
+
+/**
+ * AI 턴인지 감지하고, 방장인 경우 AI 로직을 실행하는 메인 핸들러
+ */
+function handleAITurn(room) {
+    if (!room || room.state !== 'playing' || !room.players) return;
+
+    const aiPlayerId = room.currentPlayerTurn;
+    const currentPlayer = room.players[aiPlayerId];
+
+    // 1. AI 턴인가?
+    // 2. 내가 방장인가? (방장만 AI를 제어)
+    // 3. 로컬 API 키가 있는가?
+    // 4. AI가 이미 생각 중이 아닌가?
+    if (currentPlayer && currentPlayer.isAI && 
+        room.host === currentPlayer.id && 
+        localGeminiKey && 
+        !isAiThinking) 
+    {
+        isAiThinking = true; // 락(Lock) 설정
+        console.log("Gemini AI가 생각 중입니다...");
+
+        // 1초 딜레이 (너무 빠르면 사람이 인지 못함)
+        setTimeout(() => {
+            runGeminiAI(room, localGeminiKey)
+                .then(move => {
+                    // Gemini가 제안한 행동(move) 검증
+                    const validation = validateAIMove(room, move, aiPlayerId);
+
+                    if (validation.isValid) {
+                        if (move.action === 'play') {
+                            console.log(`AI가 ${validation.card.suit} ${validation.card.rank}를 냅니다.`);
+                            handlePlayCard(aiPlayerId, validation.card.id, move.changeSuitTo);
+                        } else {
+                            console.log("AI가 카드를 뽑습니다.");
+                            handleDrawCard(aiPlayerId);
+                        }
+                    } else {
+                        // Gemini가 헛소리(환각)를 하거나 낼 카드가 없음
+                        console.warn("AI의 제안이 유효하지 않음:", move, "이유:", validation.reason);
+                        console.log("AI가 대신 카드를 뽑습니다.");
+                        handleDrawCard(aiPlayerId);
+                    }
+                })
+                .catch(err => {
+                    console.error("Gemini AI 실행 오류:", err);
+                    console.log("AI 오류로 인해 카드를 뽑습니다.");
+                    handleDrawCard(aiPlayerId); // 오류 시 강제 드로우
+                })
+                .finally(() => {
+                    // Firebase DB 업데이트가 onValue를 다시 트리거할 시간을 주기 위해 딜레이
+                    setTimeout(() => { isAiThinking = false; }, 1000);
+                });
+        }, 1000);
+    }
+}
+
+/**
+ * Gemini API를 호출하여 AI의 다음 행동을 결정
+ */
+async function runGeminiAI(room, apiKey) {
+    const aiPlayerId = room.currentPlayerTurn;
+    const aiHand = Object.values(room.players[aiPlayerId].hand || {});
+    const topCard = Object.values(room.discardPile).pop();
+    const attackStack = room.attackStack || 0;
+
+    // 1. AI가 낼 수 있는 카드가 있는지 먼저 확인 (프롬프트 최적화)
+    const playableCards = aiHand.filter(card => canPlayCard(card, topCard, attackStack));
+    
+    // 2. 프롬프트 생성
+    const prompt = `
+        당신은 원카드(One Card) 게임의 AI 플레이어입니다.
+        현재 게임 상황에 맞춰 *반드시* 다음 JSON 형식 중 하나로만 응답하세요.
+        다른 설명은 절대 추가하지 마세요.
+
+        1. 카드 내기: {"action": "play", "suit": "heart", "rank": "5"}
+        2. 카드 뽑기: {"action": "draw"}
+        3. (만약 7 카드를 낸다면): {"action": "play", "suit": "club", "rank": "7", "changeSuitTo": "spade"}
+
+        [게임 규칙 요약]
+        - 낼 수 있는 카드: 버려진 카드와 모양(suit) 또는 숫자(rank)가 같아야 함.
+        - 공격 카드(A: 3장, 2: 2장, Joker: 5/7장): 공격 스택(attackStack)이 0일 때만 낼 수 있음.
+        - 공격 방어: attackStack > 0일 때는 A, 2, Joker로만 방어 가능. (같은 랭크 또는 조커)
+        - J: 턴 점프, Q: 턴 역행, K: 턴 유지 (한 번 더)
+        - 7: 낸 뒤 원하는 모양으로 변경.
+        - 낼 카드가 없으면 'draw'해야 함.
+
+        [현재 상황]
+        - 내 손 패(AI): ${aiHand.map(c => `${c.suit} ${c.rank}`).join(', ') || '없음'}
+        - 버려진 카드(맨 위): ${topCard.suit} ${topCard.rank}
+        - 누적된 공격 스택: ${attackStack} 장
+        - 낼 수 있는 카드 목록: ${playableCards.map(c => `${c.suit} ${c.rank}`).join(', ') || '없음'}
+        - 다른 플레이어 카드 수: ${Object.values(room.players).filter(p => !p.isAI && p.id !== aiPlayerId).map(p => `${p.name}: ${Object.keys(p.hand || {}).length}장`).join(', ')}
+
+        [지시]
+        1. 낼 수 있는 카드 목록(${playableCards.length > 0 ? '있음' : '없음'})을 확인하세요.
+        2. 낼 카드가 없으면 {"action": "draw"}를 반환하세요.
+        3. 낼 카드가 있다면, 목록 중 가장 전략적인 카드 1개를 골라 JSON 형식으로 반환하세요.
+        4. (전략 팁: 공격 카드를 우선적으로 방어하거나, K/J/Q/7을 적절히 사용하세요.)
+        
+        JSON 응답만 하세요:
+    `;
+
+    // 3. Gemini API 호출
+    const url = `https://generativelace.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
+    
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            safetySettings: [
+                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+            ],
+            generationConfig: {
+                temperature: 0.8, // 약간의 무작위성
+                maxOutputTokens: 256,
+            }
+        })
+    });
+
+    if (!response.ok) {
+        throw new Error(`Gemini API 오류: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    
+    // 4. 응답 파싱
+    try {
+        const aiResponseText = data.candidates[0].content.parts[0].text;
+        // JSON 문자열만 추출 (Gemini가 ```json ... ``` 등으로 감쌀 수 있음)
+        const jsonMatch = aiResponseText.match(/\{.*\}/s);
+        if (!jsonMatch) {
+            console.error("Gemini가 JSON을 반환하지 않음:", aiResponseText);
+            return { action: 'draw' }; // 오류 시 강제 드로우
+        }
+        return JSON.parse(jsonMatch[0]);
+    } catch (e) {
+        console.error("Gemini 응답 파싱 오류:", e, data);
+        return { action: 'draw' }; // 오류 시 강제 드로우
+    }
+}
+
+/**
+ * Gemini의 응답이 유효한지 (규칙 위반, 환각) 검증
+ */
+function validateAIMove(room, move, aiPlayerId) {
+    if (!move || !move.action) {
+        return { isValid: false, reason: "알 수 없는 행동" };
+    }
+
+    const aiHandList = Object.values(room.players[aiPlayerId].hand || {});
+    const topCard = Object.values(room.discardPile).pop();
+    const attackStack = room.attackStack || 0;
+
+    if (move.action === 'draw') {
+        // AI가 'draw'를 선택했으면, 낼 수 있는 카드가 있어도 일단 유효한 것으로 간주 (전략일 수 있음)
+        return { isValid: true };
+    }
+
+    if (move.action === 'play') {
+        if (!move.suit || !move.rank) {
+            return { isValid: false, reason: "카드가 특정되지 않음" };
+        }
+
+        // 1. AI가 그 카드를 정말 가지고 있는가?
+        const cardInHand = aiHandList.find(c => c.suit === move.suit && c.rank === move.rank);
+        if (!cardInHand) {
+            return { isValid: false, reason: "손에 없는 카드 (환각)" };
+        }
+
+        // 2. 그 카드를 지금 낼 수 있는가? (규칙 검증)
+        if (!canPlayCard(cardInHand, topCard, attackStack)) {
+            return { isValid: false, reason: "낼 수 없는 카드 (규칙 위반)" };
+        }
+        
+        // 3. 7카드 검증
+        if (cardInHand.rank === '7') {
+            if (!['heart', 'diamond', 'club', 'spade'].includes(move.changeSuitTo)) {
+                return { isValid: false, reason: "7카드 무늬 변경(changeSuitTo) 오류" };
+            }
+        }
+
+        return { isValid: true, card: cardInHand };
+    }
+    
+    return { isValid: false, reason: "알 수 없는 행동" };
 }
