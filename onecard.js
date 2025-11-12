@@ -778,7 +778,7 @@ async function runGeminiAI(room, apiKey, modelName) {
             ],
             generationConfig: {
                 temperature: 0.9, 
-                maxOutputTokens: 1024,
+                maxOutputTokens: 8192,
             }
         })
     });
