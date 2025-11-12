@@ -35,6 +35,7 @@ const myHand = document.getElementById('my-hand');
 const discardPile = document.getElementById('discard-pile');
 const deckPile = document.getElementById('deck');
 const aiDebugLog = document.getElementById('ai-debug-log'); // ⛔️ [AI 디버그] 로그 DOM
+const aiThoughtDisplay = document.getElementById('ai-thought-display');
 
 // Firebase 참조
 const roomsRef = ref(database, 'onecard_rooms');
@@ -306,9 +307,21 @@ function updateGameBoard(roomData) {
         const deckCount = roomData.deck ? roomData.deck.length : 0;
         deckPile.textContent = `덱 (${deckCount})`;
 
+        if (roomData.aiThought && roomData.aiThought.reasoning) {
+            const thought = roomData.aiThought;
+            aiThoughtDisplay.textContent = `${thought.playerName}: "${thought.reasoning}"`;
+            aiThoughtDisplay.style.display = 'block';
+            setTimeout(() => {
+                if (aiThoughtDisplay) {
+                    aiThoughtDisplay.style.display = 'none';
+                }
+            }, 5000); 
+        }
+
     } else {
         discardPile.innerHTML = '';
         deckPile.textContent = '덱';
+        aiThoughtDisplay.style.display = 'none';
     }
     
     if (roomData.state === 'finished') {
@@ -644,7 +657,6 @@ function handleAITurn(room) {
     {
         isAiThinking = true; 
         
-        // ⛔️ [AI 디버그] 로그 창에 현재 상태 표시
         const topCard = Object.values(room.discardPile).pop();
         aiDebugLog.textContent = `[AI 턴] ${localGeminiModel} 생각 중...
 바닥 카드: ${topCard.suit} ${topCard.rank}
@@ -653,12 +665,21 @@ function handleAITurn(room) {
         setTimeout(() => {
             runGeminiAI(room, localGeminiKey, localGeminiModel)
                 .then(move => {
-                    // ⛔️ [AI 디버그] 1. Gemini의 원본 응답(JSON)을 로그에 표시
+                    if (currentPlayer.roomId) {
+                        const aiThoughtRef = ref(database, `onecard_rooms/${currentPlayer.roomId}/aiThought`);
+                        const reasoning = move.reasoning || '이유를 생각하지 못했습니다.';
+                        const playerName = room.players[aiPlayerId] ? room.players[aiPlayerId].name : 'AI';
+                        set(aiThoughtRef, {
+                            playerName: playerName,
+                            reasoning: reasoning,
+                            timestamp: Date.now()
+                        });
+                    }
+
                     aiDebugLog.textContent += `\n\n[Gemini 응답 (Raw)]\n${JSON.stringify(move, null, 2)}`;
                     
                     const validation = validateAIMove(room, move, aiPlayerId);
 
-                    // ⛔️ [AI 디버그] 2. 검증 결과(Validation)를 로그에 표시
                     aiDebugLog.textContent += `\n\n[검증 결과]\nisValid: ${validation.isValid}\nReason: ${validation.reason || 'N/A'}`;
 
                     if (validation.isValid) {
@@ -668,15 +689,13 @@ function handleAITurn(room) {
                             handleDrawCard(aiPlayerId);
                         }
                     } else {
-                        // 검증 실패 시 강제 드로우
                         handleDrawCard(aiPlayerId);
                     }
                 })
                 .catch(err => {
-                    // ⛔️ [AI 디버그] 3. API 호출 오류 시 로그에 표시
                     aiDebugLog.textContent += `\n\n[API 오류]\n${err.message}`;
                     console.error("Gemini AI 실행 오류:", err);
-                    handleDrawCard(aiPlayerId); // 오류 시 강제 드로우
+                    handleDrawCard(aiPlayerId); 
                 })
                 .finally(() => {
                     setTimeout(() => { isAiThinking = false; }, 1000);
@@ -695,40 +714,43 @@ async function runGeminiAI(room, apiKey, modelName) {
     const topCard = room.discardPile[discardKeys[discardKeys.length - 1]];
     const attackStack = room.attackStack || 0;
 
-    // ⛔️ [버그 수정] '낼 수 있는 카드 목록'을 미리 계산하던 '족쇄'를 제거합니다.
-    // const playableCards = aiHand.filter(card => canPlayCard(card, topCard, attackStack));
-    
-    // ⛔️ [버그 수정] AI가 스스로 생각하도록 프롬프트를 수정합니다.
     const prompt = `
-        당신은 원카드(One Card) 게임의 AI 플레이어입니다.
-        현재 게임 상황을 보고, 내야 할 카드나 행동을 *반드시* 다음 JSON 형식 중 하나로만 응답하세요.
-        다른 설명은 절대 추가하지 마세요.
+        당신은 원카드(One Card) 게임의 전략가 AI 플레이어입니다. 당신의 목표는 가장 먼저 손의 카드를 모두 없애 승리하는 것입니다.
+        현재 게임 상황을 분석하고, 당신의 다음 행동을 반드시 아래 JSON 형식으로만 응답해 주세요.
+        JSON 응답에는 당신의 행동에 대한 '이유(reasoning)'를 반드시 포함해야 합니다. 다른 부가 설명은 절대 추가하지 마세요.
 
-        1. 카드 내기: {"action": "play", "suit": "heart", "rank": "5"}
-        2. 카드 뽑기: {"action": "draw"}
-        3. (만약 7 카드를 낸다면): {"action": "play", "suit": "club", "rank": "7", "changeSuitTo": "spade"}
+        **응답 JSON 형식:**
+        {
+          "action": "play" 또는 "draw",
+          "suit": "heart", 
+          "rank": "5",     
+          "changeSuitTo": "spade", 
+          "reasoning": "이번 행동을 선택한 전략적인 이유를 간략히 설명합니다."
+        }
 
-        [게임 규칙 요약]
+        **[게임 규칙 요약]**
         - 낼 수 있는 카드: 버려진 카드와 모양(suit) 또는 숫자(rank)가 같아야 함.
         - 7-suit-change 카드: 바닥에 이 카드가 있으면, 표시된 무늬(suit)와 같거나, 7, Joker만 낼 수 있음.
         - 공격 카드(A: 3장, 2: 2장, Joker: 5/7장): 공격 스택(attackStack)이 0일 때만 낼 수 있음.
         - 공격 방어: attackStack > 0일 때는 A, 2, Joker로만 방어 가능. (같은 랭크 또는 조커)
-        - J: 턴 점프, Q: 턴 역행, K: 턴 유지 (한 번 더)
-        - 7: 낸 뒤 원하는 모양으로 변경.
-        - 낼 카드가 없으면 'draw'해야 함.
+        - J: 다음 플레이어 턴 건너뛰기.
+        - Q: 턴 진행 방향 반대로.
+        - K: 한 번 더 플레이.
+        - 7: 카드를 낸 뒤 원하는 모양으로 변경.
+        - 낼 카드가 없으면 반드시 "draw" 해야 함.
 
-        [현재 상황]
+        **[현재 상황]**
         - 내 손 패(AI): ${aiHand.map(c => `${c.suit} ${c.rank}`).join(', ') || '없음'}
         - 버려진 카드(맨 위): ${topCard.suit} ${topCard.rank}
         - 누적된 공격 스택: ${attackStack} 장
         - 다른 플레이어 카드 수: ${Object.values(room.players).filter(p => !p.isAI && p.id !== aiPlayerId).map(p => `${p.name}: ${Object.keys(p.hand || {}).length}장`).join(', ')}
 
-        [지시]
-        1. [현재 상황]과 [게임 규칙]을 바탕으로 낼 수 있는 카드가 있는지 판단하세요.
-        2. 낼 수 있는 카드가 없으면, 반드시 {"action": "draw"}를 반환하세요.
-        3. 낼 수 있는 카드가 있다면, 그 중 가장 전략적인 카드 1개를 골라 JSON 형식으로 반환하세요.
-        (전략 팁: 공격 카드를 우선적으로 방어하거나, K/J/Q/7을 적절히 사용하세요.)
-        
+        **[당신의 임무]**
+        1. 손에 든 카드와 게임 상황을 면밀히 분석하세요.
+        2. 승리하기 위한 최적의 전략을 수립하세요. (예: "다음 플레이어의 카드가 적으니 공격 카드를 사용해야겠다." 또는 "지금은 위험하니 일단 일반 카드를 내고 상황을 지켜보자.")
+        3. 수립한 전략에 따라 낼 카드 1개를 선택하거나, 카드를 뽑는 행동을 결정하세요.
+        4. 당신의 결정과 그 이유를 지정된 JSON 형식으로만 응답하세요.
+
         JSON 응답만 하세요:
     `;
 
@@ -747,7 +769,7 @@ async function runGeminiAI(room, apiKey, modelName) {
             ],
             generationConfig: {
                 temperature: 0.8, 
-                maxOutputTokens: 256,
+                maxOutputTokens: 512,
             }
         })
     });
@@ -761,18 +783,18 @@ async function runGeminiAI(room, apiKey, modelName) {
     try {
         if (!data.candidates || data.candidates.length === 0) {
              console.error("Gemini가 응답을 반환하지 않음 (안전 설정 등 확인):", data);
-             return { action: 'draw' };
+             return { action: 'draw', reasoning: 'API에서 응답이 없어 카드를 뽑습니다.' };
         }
         const aiResponseText = data.candidates[0].content.parts[0].text;
         const jsonMatch = aiResponseText.match(/\{.*\}/s);
         if (!jsonMatch) {
             console.error("Gemini가 JSON을 반환하지 않음:", aiResponseText);
-            return { action: 'draw' }; 
+            return { action: 'draw', reasoning: 'API가 유효한 JSON을 반환하지 않아 카드를 뽑습니다.' }; 
         }
         return JSON.parse(jsonMatch[0]);
     } catch (e) {
         console.error("Gemini 응답 파싱 오류:", e, data);
-        return { action: 'draw' };
+        return { action: 'draw', reasoning: 'API 응답을 파싱하는 데 실패하여 카드를 뽑습니다.' };
     }
 }
 
