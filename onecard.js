@@ -297,10 +297,8 @@ function updateGameBoard(roomData) {
     if (!roomData) return;
     
     if (roomData.state === 'playing') {
-        const discardData = roomData.discardPile || {};
-        const topCardId = Object.keys(discardData).pop();
-        if (topCardId) {
-            const topCard = discardData[topCardId];
+        if (roomData.topCardId && roomData.discardPile[roomData.topCardId]) {
+            const topCard = roomData.discardPile[roomData.topCardId];
             discardPile.innerHTML = '';
             discardPile.appendChild(createCardDiv(topCard));
         }
@@ -374,8 +372,13 @@ function canPlayCard(cardToPlay, topCard, currentAttack) {
 
     if (topCard.rank === '7-suit-change') {
         if (currentAttack > 0) {
+            // 공격 중일 때는 공격 카드만 낼 수 있음 (기존 로직 유지)
             return ['A', '2', 'Joker'].includes(cardToPlay.rank);
         } else {
+            // 7로 무늬가 변경되었을 때:
+            // 1. 변경된 무늬와 같은 카드를 내거나
+            // 2. 조커를 내거나
+            // 3. 또 다른 7 카드를 낼 수 있음 (버그 수정)
             return cardToPlay.suit === topCard.suit || 
                    cardToPlay.rank === 'Joker' ||
                    cardToPlay.rank === '7';
@@ -393,6 +396,7 @@ function canPlayCard(cardToPlay, topCard, currentAttack) {
         }
         return false;
     } else {
+        // 일반적인 상황: 무늬 또는 랭크가 같거나, 조커일 때 낼 수 있음
         return cardToPlay.suit === topCard.suit || 
                cardToPlay.rank === topCard.rank || 
                cardToPlay.rank === 'Joker';
@@ -425,9 +429,7 @@ function handlePlayCard(playerId, cardId, chosenSuit = null) {
         }
 
         const cardToPlay = room.players[playerId].hand[cardId];
-        const discardKeys = Object.keys(room.discardPile);
-        const topCardId = discardKeys[discardKeys.length - 1];
-        const topCard = room.discardPile[topCardId];
+        const topCard = room.topCardId ? room.discardPile[room.topCardId] : null;
         
         const currentAttack = room.attackStack || 0;
 
@@ -438,6 +440,7 @@ function handlePlayCard(playerId, cardId, chosenSuit = null) {
 
         delete room.players[playerId].hand[cardId];
         room.discardPile[cardId] = cardToPlay;
+        room.topCardId = cardId; // 카드를 낼 때마다 topCardId를 업데이트
         
         if (Object.keys(room.players[playerId].hand).length === 0) {
             room.state = 'finished';
@@ -489,6 +492,7 @@ function handlePlayCard(playerId, cardId, chosenSuit = null) {
                             suit: newSuit, 
                             rank: '7-suit-change' 
                         };
+                        room.topCardId = suitChangeCardId; // 7-suit-change 카드를 topCard로 설정
                     } else {
                         if (playerId === currentPlayer.id) alert('잘못된 무늬입니다. 7카드의 원래 무늬로 유지됩니다.');
                     }
@@ -555,10 +559,13 @@ function refillDeck(room) {
         return room;
     }
 
-    const topCardId = discardKeys.pop(); 
+    const topCardId = room.topCardId;
     const topCard = room.discardPile[topCardId]; 
 
-    const cardsToShuffle = discardKeys.map(key => room.discardPile[key]);
+    const cardsToShuffle = discardKeys
+        .filter(key => key !== topCardId)
+        .map(key => room.discardPile[key]);
+        
     shuffleDeck(cardsToShuffle);
 
     room.deck = (room.deck || []).concat(cardsToShuffle); 
@@ -600,6 +607,7 @@ startGameBtn.addEventListener('click', () => {
             
             room.deck = deck;
             room.discardPile = { [discardCard.id]: discardCard };
+            room.topCardId = discardCard.id; // 맨 위 카드 ID를 명시적으로 설정
             room.currentPlayerTurn = playerIds[0]; 
             room.state = 'playing';
             room.attackStack = 0; 
@@ -710,14 +718,22 @@ function handleAITurn(room) {
 async function runGeminiAI(room, apiKey, modelName) {
     const aiPlayerId = room.currentPlayerTurn;
     const aiHand = Object.values(room.players[aiPlayerId].hand || {});
-    const discardKeys = Object.keys(room.discardPile);
-    const topCard = room.discardPile[discardKeys[discardKeys.length - 1]];
+    const topCard = room.topCardId ? room.discardPile[room.topCardId] : null;
     const attackStack = room.attackStack || 0;
 
     const prompt = `
-        당신은 원카드(One Card) 게임의 전략가 AI 플레이어입니다. 당신의 목표는 가장 먼저 손의 카드를 모두 없애 승리하는 것입니다.
-        현재 게임 상황을 분석하고, 당신의 다음 행동을 반드시 아래 JSON 형식으로만 응답해 주세요.
-        JSON 응답에는 당신의 행동에 대한 '이유(reasoning)'를 반드시 포함해야 합니다. 다른 부가 설명은 절대 추가하지 마세요.
+        당신은 'Tree of Thoughts' 추론 기법을 사용하는 세계 최고 수준의 원카드(One Card) AI 전략가입니다.
+        당신의 임무는 게임 상황을 분석하고 최적의 행동을 결정하는 것입니다. 최종 답변을 내기 전에, 내부적으로 다음 사고 과정을 반드시 거치세요.
+
+        --- Tree of Thoughts 프로세스 ---
+        1.  **사고 생성 (Thought Generation)**: 당신의 패와 현재 게임 상황을 바탕으로, 가능한 전략적인 행동(생각)을 최소 3가지 생성하세요. 각 생각에 대해 장점(예: "다음 플레이어를 강하게 압박할 수 있다")과 단점(예: "내 손에 특정 무늬 카드가 남지 않게 된다")을 간략하게 분석하세요.
+        2.  **평가 (Evaluation)**: 당신이 생성한 생각들을 비판적으로 평가하고 서로 비교하세요. 어떤 행동이 승리라는 최종 목표에 가장 효과적으로 기여합니까? 어떤 것이 가장 안전하며, 어떤 것이 가장 공격적입니까? 다른 플레이어들의 카드 수를 고려하여 최선의 수를 판단하세요.
+        3.  **종합 및 결정 (Synthesis & Decision)**: 평가를 바탕으로, 가장 뛰어나다고 판단되는 단 하나의 행동을 최종적으로 선택하세요.
+
+        --- 최종 출력 ---
+        당신의 내부적인 사고 과정(위 1, 2, 3단계)은 최종 출력에 포함하지 마세요.
+        오직 당신의 최종 결정을 아래 명시된 JSON 형식으로만 반환해야 합니다.
+        JSON의 "reasoning" 필드에는, 당신이 다른 선택지 대신 이 행동을 선택한 '핵심적인 이유'를 요약하여 담아주세요.
 
         **응답 JSON 형식:**
         {
@@ -725,33 +741,16 @@ async function runGeminiAI(room, apiKey, modelName) {
           "suit": "heart", 
           "rank": "5",     
           "changeSuitTo": "spade", 
-          "reasoning": "이번 행동을 선택한 전략적인 이유를 간략히 설명합니다."
+          "reasoning": "고려했던 다른 선택지들보다 이 행동이 더 나은 이유를 간략히 요약합니다."
         }
 
-        **[게임 규칙 요약]**
-        - 낼 수 있는 카드: 버려진 카드와 모양(suit) 또는 숫자(rank)가 같아야 함.
-        - 7-suit-change 카드: 바닥에 이 카드가 있으면, 표시된 무늬(suit)와 같거나, 7, Joker만 낼 수 있음.
-        - 공격 카드(A: 3장, 2: 2장, Joker: 5/7장): 공격 스택(attackStack)이 0일 때만 낼 수 있음.
-        - 공격 방어: attackStack > 0일 때는 A, 2, Joker로만 방어 가능. (같은 랭크 또는 조커)
-        - J: 다음 플레이어 턴 건너뛰기.
-        - Q: 턴 진행 방향 반대로.
-        - K: 한 번 더 플레이.
-        - 7: 카드를 낸 뒤 원하는 모양으로 변경.
-        - 낼 카드가 없으면 반드시 "draw" 해야 함.
-
-        **[현재 상황]**
+        **[현재 게임 상황]**
         - 내 손 패(AI): ${aiHand.map(c => `${c.suit} ${c.rank}`).join(', ') || '없음'}
-        - 버려진 카드(맨 위): ${topCard.suit} ${topCard.rank}
+        - 버려진 카드(맨 위): ${topCard ? `${topCard.suit} ${topCard.rank}` : '없음'}
         - 누적된 공격 스택: ${attackStack} 장
         - 다른 플레이어 카드 수: ${Object.values(room.players).filter(p => !p.isAI && p.id !== aiPlayerId).map(p => `${p.name}: ${Object.keys(p.hand || {}).length}장`).join(', ')}
 
-        **[당신의 임무]**
-        1. 손에 든 카드와 게임 상황을 면밀히 분석하세요.
-        2. 승리하기 위한 최적의 전략을 수립하세요. (예: "다음 플레이어의 카드가 적으니 공격 카드를 사용해야겠다." 또는 "지금은 위험하니 일단 일반 카드를 내고 상황을 지켜보자.")
-        3. 수립한 전략에 따라 낼 카드 1개를 선택하거나, 카드를 뽑는 행동을 결정하세요.
-        4. 당신의 결정과 그 이유를 지정된 JSON 형식으로만 응답하세요.
-
-        JSON 응답만 하세요:
+        이제, 'Tree of Thoughts' 분석을 수행하고 최종 결정 사항만 JSON 객체로 응답하세요:
     `;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
@@ -768,7 +767,7 @@ async function runGeminiAI(room, apiKey, modelName) {
                 { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
             ],
             generationConfig: {
-                temperature: 0.8, 
+                temperature: 0.9, 
                 maxOutputTokens: 512,
             }
         })
