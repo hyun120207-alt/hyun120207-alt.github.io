@@ -1,7 +1,6 @@
 // Firebase SDK 가져오기
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-app.js";
 import { getDatabase, ref, push, onValue, set, remove, onDisconnect, runTransaction } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-database.js";
-
 // Firebase 설정
 const firebaseConfig = {
     apiKey: "AIzaSyB5TAYEoAEawpaYr1tR373OhCYumOc4B7o",
@@ -12,7 +11,6 @@ const firebaseConfig = {
     messagingSenderId: "894357766876",
     appId: "1:894357766876:web:bd27cd3f1da7e29b3eaa19"
 };
-
 // Firebase 앱 초기화
 const app = initializeApp(firebaseConfig, "onecard-game"); 
 const database = getDatabase(app);
@@ -642,7 +640,10 @@ function shuffleDeck(deck) {
 // ===========================================
 
 /**
- * AI 턴인지 감지하고, 방장인 경우 AI 로직을 실행하는 메인 핸들러
+ * AI 턴인지 감지하고, 방장(Host)인 경우 AI 로직을 실행하는 메인 핸들러
+ * - topCard를 정확하게 참조 (room.topCardId 이용)
+ * - playerName, aiPlayerId 변수 모두 정상적으로 사용
+ * - 에러 핸들링 및 상태 클린업 강화
  */
 function handleAITurn(room) {
     if (!room || room.state !== 'playing' || !room.players) return;
@@ -651,20 +652,21 @@ function handleAITurn(room) {
     const playerWhoseTurnItIs = room.players[aiPlayerId];
     const amITheHost = (room.host === currentPlayer.id);
 
+    // AI 플레이어의 턴이고 Host가 나일 때, AI 설정 값이 모두 있을 때, AI가 이미 생각 중이 아니면 실행
     if (
-        playerWhoseTurnItIs &&      
-        playerWhoseTurnItIs.isAI && 
-        amITheHost &&               
-        localGeminiKey &&           
-        localGeminiModel &&         
-        !isAiThinking               
-    ) 
-    {
-        isAiThinking = true; 
-        
-        const topCard = Object.values(room.discardPile).pop();
+        playerWhoseTurnItIs &&
+        playerWhoseTurnItIs.isAI &&
+        amITheHost &&
+        localGeminiKey &&
+        localGeminiModel &&
+        !isAiThinking
+    ) {
+        isAiThinking = true;
+
+        // topCard는 항상 room.topCardId로 참조
+        const topCard = room.topCardId ? room.discardPile[room.topCardId] : null;
         console.info(`[AI 턴] ${localGeminiModel} 생각 중...`, {
-            topCard: `${topCard.suit} ${topCard.rank}`,
+            topCard: topCard ? `${topCard.suit} ${topCard.rank}` : '없음',
             attackStack: room.attackStack || 0
         });
 
@@ -677,23 +679,17 @@ function handleAITurn(room) {
                     if (currentPlayer.roomId) {
                         const aiThoughtRef = ref(database, `onecard_rooms/${currentPlayer.roomId}/aiInternalThought`);
                         set(aiThoughtRef, {
-                            playerName: room.players[aiPlayerPlayerId] ? room.players[aiPlayerId].name : 'AI',
+                            playerName: room.players[aiPlayerId] ? room.players[aiPlayerId].name : 'AI',
                             thoughts: thoughts,
                             timestamp: Date.now()
                         });
                     }
 
-                    console.log("[Gemini 응답 (Raw)]", response);
-                    
+                    // AI 응답 검증
                     const validation = validateAIMove(room, move, aiPlayerId);
 
-                    console.log("[검증 결과]", {
-                        isValid: validation.isValid,
-                        reason: validation.reason || 'N/A'
-                    });
-
                     if (validation.isValid) {
-                        if (move.action === 'play') {
+                        if (move.action === 'play' && validation.card) {
                             handlePlayCard(aiPlayerId, validation.card.id, move.changeSuitTo);
                         } else {
                             handleDrawCard(aiPlayerId);
@@ -712,9 +708,10 @@ function handleAITurn(room) {
                             timestamp: Date.now()
                         });
                     }
-                    handleDrawCard(aiPlayerId); 
+                    handleDrawCard(aiPlayerId);
                 })
                 .finally(() => {
+                    // 1초 후 isAiThinking을 해제 (중복실행 방지)
                     setTimeout(() => { isAiThinking = false; }, 1000);
                 });
         }, 1000);
@@ -737,10 +734,10 @@ async function runGeminiAI(room, apiKey, modelName) {
 
         --- 사고 및 응답 프로세스 ---
         1.  **상황 분석 (Analyze)**: 현재 당신의 패, 버려진 카드, 공격 스택, 다른 플레이어들의 카드 수를 확인합니다.
-        2.  **선택지 생성 (Generate Options)**: 분석을 바탕으로, 가능한 전략적인 행동(플레이할 카드, 드로우 등)을 최소 3가지 생성합니다. 각 선택지에 대해 예상되는 결과, 장점과 단점을 명시하세요.
-        3.  **규칙 유효성 검증 (Validate Options)**: 생성한 각 선택지가 현재 게임 규칙 하에서 실행 가능한지 스스로 검증합니다. (예: "내가 내려는 '하트 5'는 바닥의 '하트 K'와 무늬가 같으므로 낼 수 있다.") 낼 수 없는 카드는 선택지에서 제외하세요.
+        2.  **선택지 생성 (Generate Options)**: 분석을 바탕으로, 가능한 전략적인 행동(플레이할 카드, 드로우 등)을 최소 3가지 생성합니다. 각 선택지에 대��[...]
+        3.  **규칙 유효성 검증 (Validate Options)**: 생성한 각 선택지가 현재 게임 규칙 하에서 실행 가능한지 스스로 검증합니다. (예: "내가 내려는 '하트 5'�[...]
         4.  **전략적 평가 (Evaluate)**: 유효한 선택지들을 비교하여, 승리라는 최종 목표에 가장 효과적인 행동이 무엇인지 평가하고 순위를 매깁니다.
-        5.  **최종 결정 및 출력 (Decide & Output)**: 가장 순위가 높은 행동을 최종 결정으로 선택합니다. 당신의 모든 사고 과정(1~4단계)을 'internal_thoughts' 필드에 상세히 서술하고, 최종 결정 사항을 'final_decision' 필드에 담아 아래 JSON 형식으로만 응답하세요.
+        5.  **최종 결정 및 출력 (Decide & Output)**: 가장 순위가 높은 행동을 최종 결정으로 선택합니다. 당신의 모든 사고 과정(1~4단계)을 'internal_thoughts' 필�[...]
 
         **응답 JSON 형식:**
         {
@@ -856,6 +853,3 @@ function validateAIMove(room, move, aiPlayerId) {
     
     return { isValid: false, reason: "알 수 없는 행동 (Unknown Action)" };
 }
-
-
-
