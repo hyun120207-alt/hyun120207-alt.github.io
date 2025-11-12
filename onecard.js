@@ -34,8 +34,7 @@ const opponentHand = document.getElementById('opponent-hand');
 const myHand = document.getElementById('my-hand');
 const discardPile = document.getElementById('discard-pile');
 const deckPile = document.getElementById('deck');
-const aiDebugLog = document.getElementById('ai-debug-log'); // ⛔️ [AI 디버그] 로그 DOM
-const aiThoughtDisplay = document.getElementById('ai-thought-display');
+const aiInternalThoughtDisplay = document.getElementById('ai-internal-thought');
 
 // Firebase 참조
 const roomsRef = ref(database, 'onecard_rooms');
@@ -200,7 +199,8 @@ function leaveRoom() {
     currentPlayer.playerRef = null;
     localGeminiKey = null;
     localGeminiModel = null; 
-    aiDebugLog.textContent = ''; // ⛔️ [AI 디버그] 로그 창 비우기
+    aiInternalThoughtDisplay.textContent = '';
+    aiInternalThoughtDisplay.style.display = 'none';
 
     gameLobby.style.display = 'block';
     gameRoom.style.display = 'none';
@@ -305,21 +305,18 @@ function updateGameBoard(roomData) {
         const deckCount = roomData.deck ? roomData.deck.length : 0;
         deckPile.textContent = `덱 (${deckCount})`;
 
-        if (roomData.aiThought && roomData.aiThought.reasoning) {
-            const thought = roomData.aiThought;
-            aiThoughtDisplay.textContent = `${thought.playerName}: "${thought.reasoning}"`;
-            aiThoughtDisplay.style.display = 'block';
-            setTimeout(() => {
-                if (aiThoughtDisplay) {
-                    aiThoughtDisplay.style.display = 'none';
-                }
-            }, 5000); 
+        if (roomData.aiInternalThought && roomData.aiInternalThought.thoughts) {
+            const thought = roomData.aiInternalThought;
+            aiInternalThoughtDisplay.textContent = `--- ${thought.playerName}의 생각 ---\n${thought.thoughts}`;
+            aiInternalThoughtDisplay.style.display = 'block';
+        } else {
+            aiInternalThoughtDisplay.style.display = 'none';
         }
 
     } else {
         discardPile.innerHTML = '';
         deckPile.textContent = '덱';
-        aiThoughtDisplay.style.display = 'none';
+        aiInternalThoughtDisplay.style.display = 'none';
     }
     
     if (roomData.state === 'finished') {
@@ -666,29 +663,34 @@ function handleAITurn(room) {
         isAiThinking = true; 
         
         const topCard = Object.values(room.discardPile).pop();
-        aiDebugLog.textContent = `[AI 턴] ${localGeminiModel} 생각 중...
-바닥 카드: ${topCard.suit} ${topCard.rank}
-공격 스택: ${room.attackStack || 0}`;
+        console.info(`[AI 턴] ${localGeminiModel} 생각 중...`, {
+            topCard: `${topCard.suit} ${topCard.rank}`,
+            attackStack: room.attackStack || 0
+        });
 
         setTimeout(() => {
             runGeminiAI(room, localGeminiKey, localGeminiModel)
-                .then(move => {
+                .then(response => {
+                    const move = response.final_decision || { action: 'draw', reasoning: 'API 응답 구조 오류로 카드를 뽑습니다.' };
+                    const thoughts = response.internal_thoughts || 'AI가 생각하는 과정을 기록하지 못했습니다.';
+
                     if (currentPlayer.roomId) {
-                        const aiThoughtRef = ref(database, `onecard_rooms/${currentPlayer.roomId}/aiThought`);
-                        const reasoning = move.reasoning || '이유를 생각하지 못했습니다.';
-                        const playerName = room.players[aiPlayerId] ? room.players[aiPlayerId].name : 'AI';
+                        const aiThoughtRef = ref(database, `onecard_rooms/${currentPlayer.roomId}/aiInternalThought`);
                         set(aiThoughtRef, {
-                            playerName: playerName,
-                            reasoning: reasoning,
+                            playerName: room.players[aiPlayerId] ? room.players[aiPlayerId].name : 'AI',
+                            thoughts: thoughts,
                             timestamp: Date.now()
                         });
                     }
 
-                    aiDebugLog.textContent += `\n\n[Gemini 응답 (Raw)]\n${JSON.stringify(move, null, 2)}`;
+                    console.log("[Gemini 응답 (Raw)]", response);
                     
                     const validation = validateAIMove(room, move, aiPlayerId);
 
-                    aiDebugLog.textContent += `\n\n[검증 결과]\nisValid: ${validation.isValid}\nReason: ${validation.reason || 'N/A'}`;
+                    console.log("[검증 결과]", {
+                        isValid: validation.isValid,
+                        reason: validation.reason || 'N/A'
+                    });
 
                     if (validation.isValid) {
                         if (move.action === 'play') {
@@ -701,8 +703,15 @@ function handleAITurn(room) {
                     }
                 })
                 .catch(err => {
-                    aiDebugLog.textContent += `\n\n[API 오류]\n${err.message}`;
                     console.error("Gemini AI 실행 오류:", err);
+                    if (currentPlayer.roomId) {
+                        const aiThoughtRef = ref(database, `onecard_rooms/${currentPlayer.roomId}/aiInternalThought`);
+                        set(aiThoughtRef, {
+                            playerName: room.players[aiPlayerId] ? room.players[aiPlayerId].name : 'AI',
+                            thoughts: `API 오류 발생: ${err.message}`,
+                            timestamp: Date.now()
+                        });
+                    }
                     handleDrawCard(aiPlayerId); 
                 })
                 .finally(() => {
@@ -723,25 +732,26 @@ async function runGeminiAI(room, apiKey, modelName) {
 
     const prompt = `
         당신은 'Tree of Thoughts' 추론 기법을 사용하는 세계 최고 수준의 원카드(One Card) AI 전략가입니다.
-        당신의 임무는 게임 상황을 분석하고 최적의 행동을 결정하는 것입니다. 최종 답변을 내기 전에, 내부적으로 다음 사고 과정을 반드시 거치세요.
+        당신의 임무는 게임 상황을 분석하고 최적의 행동을 결정하는 것입니다.
+        최종 결정을 내리기 전에, 당신의 모든 사고 과정을 포함한 JSON 객체를 반환해야 합니다.
 
-        --- Tree of Thoughts 프로세스 ---
-        1.  **사고 생성 (Thought Generation)**: 당신의 패와 현재 게임 상황을 바탕으로, 가능한 전략적인 행동(생각)을 최소 3가지 생성하세요. 각 생각에 대해 장점(예: "다음 플레이어를 강하게 압박할 수 있다")과 단점(예: "내 손에 특정 무늬 카드가 남지 않게 된다")을 간략하게 분석하세요.
-        2.  **평가 (Evaluation)**: 당신이 생성한 생각들을 비판적으로 평가하고 서로 비교하세요. 어떤 행동이 승리라는 최종 목표에 가장 효과적으로 기여합니까? 어떤 것이 가장 안전하며, 어떤 것이 가장 공격적입니까? 다른 플레이어들의 카드 수를 고려하여 최선의 수를 판단하세요.
-        3.  **종합 및 결정 (Synthesis & Decision)**: 평가를 바탕으로, 가장 뛰어나다고 판단되는 단 하나의 행동을 최종적으로 선택하세요.
-
-        --- 최종 출력 ---
-        당신의 내부적인 사고 과정(위 1, 2, 3단계)은 최종 출력에 포함하지 마세요.
-        오직 당신의 최종 결정을 아래 명시된 JSON 형식으로만 반환해야 합니다.
-        JSON의 "reasoning" 필드에는, 당신이 다른 선택지 대신 이 행동을 선택한 '핵심적인 이유'를 요약하여 담아주세요.
+        --- 사고 및 응답 프로세스 ---
+        1.  **상황 분석 (Analyze)**: 현재 당신의 패, 버려진 카드, 공격 스택, 다른 플레이어들의 카드 수를 확인합니다.
+        2.  **선택지 생성 (Generate Options)**: 분석을 바탕으로, 가능한 전략적인 행동(플레이할 카드, 드로우 등)을 최소 3가지 생성합니다. 각 선택지에 대해 예상되는 결과, 장점과 단점을 명시하세요.
+        3.  **규칙 유효성 검증 (Validate Options)**: 생성한 각 선택지가 현재 게임 규칙 하에서 실행 가능한지 스스로 검증합니다. (예: "내가 내려는 '하트 5'는 바닥의 '하트 K'와 무늬가 같으므로 낼 수 있다.") 낼 수 없는 카드는 선택지에서 제외하세요.
+        4.  **전략적 평가 (Evaluate)**: 유효한 선택지들을 비교하여, 승리라는 최종 목표에 가장 효과적인 행동이 무엇인지 평가하고 순위를 매깁니다.
+        5.  **최종 결정 및 출력 (Decide & Output)**: 가장 순위가 높은 행동을 최종 결정으로 선택합니다. 당신의 모든 사고 과정(1~4단계)을 'internal_thoughts' 필드에 상세히 서술하고, 최종 결정 사항을 'final_decision' 필드에 담아 아래 JSON 형식으로만 응답하세요.
 
         **응답 JSON 형식:**
         {
-          "action": "play" 또는 "draw",
-          "suit": "heart", 
-          "rank": "5",     
-          "changeSuitTo": "spade", 
-          "reasoning": "고려했던 다른 선택지들보다 이 행동이 더 나은 이유를 간략히 요약합니다."
+          "internal_thoughts": "여기에 1~4단계에 해당하는 당신의 전체 사고 과정을 상세하게 서술합니다. 줄바꿈을 포함한 긴 텍스트 형식입니다.",
+          "final_decision": {
+            "action": "play" 또는 "draw",
+            "suit": "heart",
+            "rank": "5",
+            "changeSuitTo": "spade",
+            "reasoning": "이 행동을 최종 선택한 핵심 이유를 한 문장으로 요약합니다."
+          }
         }
 
         **[현재 게임 상황]**
@@ -750,10 +760,10 @@ async function runGeminiAI(room, apiKey, modelName) {
         - 누적된 공격 스택: ${attackStack} 장
         - 다른 플레이어 카드 수: ${Object.values(room.players).filter(p => !p.isAI && p.id !== aiPlayerId).map(p => `${p.name}: ${Object.keys(p.hand || {}).length}장`).join(', ')}
 
-        이제, 'Tree of Thoughts' 분석을 수행하고 최종 결정 사항만 JSON 객체로 응답하세요:
+        이제, 위의 프로세스에 따라 분석을 수행하고 최종 결정 사항을 JSON 객체로 응답하세요:
     `;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    const url = `https://generativelaanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     
     const response = await fetch(url, {
         method: 'POST',
@@ -768,7 +778,7 @@ async function runGeminiAI(room, apiKey, modelName) {
             ],
             generationConfig: {
                 temperature: 0.9, 
-                maxOutputTokens: 512,
+                maxOutputTokens: 1024,
             }
         })
     });
@@ -782,18 +792,18 @@ async function runGeminiAI(room, apiKey, modelName) {
     try {
         if (!data.candidates || data.candidates.length === 0) {
              console.error("Gemini가 응답을 반환하지 않음 (안전 설정 등 확인):", data);
-             return { action: 'draw', reasoning: 'API에서 응답이 없어 카드를 뽑습니다.' };
+             return { final_decision: { action: 'draw', reasoning: 'API에서 응답이 없어 카드를 뽑습니다.' }};
         }
         const aiResponseText = data.candidates[0].content.parts[0].text;
         const jsonMatch = aiResponseText.match(/\{.*\}/s);
         if (!jsonMatch) {
             console.error("Gemini가 JSON을 반환하지 않음:", aiResponseText);
-            return { action: 'draw', reasoning: 'API가 유효한 JSON을 반환하지 않아 카드를 뽑습니다.' }; 
+            return { final_decision: { action: 'draw', reasoning: 'API가 유효한 JSON을 반환하지 않아 카드를 뽑습니다.' }}; 
         }
         return JSON.parse(jsonMatch[0]);
     } catch (e) {
         console.error("Gemini 응답 파싱 오류:", e, data);
-        return { action: 'draw', reasoning: 'API 응답을 파싱하는 데 실패하여 카드를 뽑습니다.' };
+        return { final_decision: { action: 'draw', reasoning: 'API 응답을 파싱하는 데 실패하여 카드를 뽑습니다.' }};
     }
 }
 
