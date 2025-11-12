@@ -677,7 +677,7 @@ function handleAITurn(room) {
                     if (currentPlayer.roomId) {
                         const aiThoughtRef = ref(database, `onecard_rooms/${currentPlayer.roomId}/aiInternalThought`);
                         set(aiThoughtRef, {
-                            playerName: room.players[aiPlayerId] ? room.players[aiPlayerId].name : 'AI',
+                            playerName: room.players[aiPlayerPlayerId] ? room.players[aiPlayerId].name : 'AI',
                             thoughts: thoughts,
                             timestamp: Date.now()
                         });
@@ -763,7 +763,8 @@ async function runGeminiAI(room, apiKey, modelName) {
         이제, 위의 프로세스에 따라 분석을 수행하고 최종 결정 사항을 JSON 객체로 응답하세요:
     `;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    // ✅ [수정 완료] v1beta 엔드포인트를 v1으로 변경하여 404 오류 해결
+    const url = `https://generativelanguage.googleapis.com/v1/models/${modelName}:generateContent?key=${apiKey}`;
     
     const response = await fetch(url, {
         method: 'POST',
@@ -855,3 +856,5 @@ function validateAIMove(room, move, aiPlayerId) {
     
     return { isValid: false, reason: "알 수 없는 행동 (Unknown Action)" };
 }
+
+
