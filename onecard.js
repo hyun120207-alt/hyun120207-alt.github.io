@@ -763,7 +763,7 @@ async function runGeminiAI(room, apiKey, modelName) {
         이제, 위의 프로세스에 따라 분석을 수행하고 최종 결정 사항을 JSON 객체로 응답하세요:
     `;
 
-    const url = `https://generativelaanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     
     const response = await fetch(url, {
         method: 'POST',
