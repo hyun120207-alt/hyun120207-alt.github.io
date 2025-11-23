@@ -78,6 +78,20 @@ header {
     align-items: flex-start;
 }
 
+/* System messages (Narrative) */
+.system-message {
+    align-self: center;
+    text-align: center;
+    width: 100%;
+    color: #666;
+    font-size: 0.9em;
+}
+
+.system-message .content {
+    background-color: transparent;
+    padding: 5px 0;
+}
+
 .assistant-message .content {
     background-color: #FFFFFF;
     color: #000;
